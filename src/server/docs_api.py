@@ -50,7 +50,19 @@ language_options = [
     "hin_Deva",  # Hindi
     "tam_Taml",  # Tamil
     "tel_Telu",  # Telugu
+    "deu_Latn",
 ]
+
+
+
+def split_into_sentences(text):
+    """Split a string into sentences based on full stops."""
+    if not text.strip():
+        return []
+    # Split on full stops, preserving non-empty sentences
+    sentences = [s.strip() for s in text.split('.') if s.strip()]
+    return sentences
+
 
 # Pydantic models
 class ExtractTextRequest(BaseModel):
@@ -82,6 +94,11 @@ class ChatRequest(BaseModel):
     tgt_lang: str = Field(default="eng_Latn", description="Target language code.", enum=language_options)
     model: str = Field(default="gemma3", description="Model to use for chat.", enum=["gemma3", "moondream", "qwen2.5vl", "qwen3", "sarvam-m", "deepseek-r1"], example="gemma3")
 
+class ChatDirectRequest(BaseModel):
+    prompt: str = Field(..., description="The input prompt for the chat.")
+    model: str = Field(default="gemma3", description="Model to use for chat.", enum=["gemma3", "moondream", "qwen2.5vl", "qwen3", "sarvam-m", "deepseek-r1"], example="gemma3")
+    system_prompt: str = Field(default="", description="System Prompt")
+ 
 class ChatResponse(BaseModel):
     response: str = Field(..., description="The generated or translated response.")
 
@@ -101,7 +118,7 @@ def get_openai_client(model: str) -> OpenAI:
         "deepseek-r1": "7885"
     }
     base_url = f"http://0.0.0.0:{model_ports[model]}/v1"
-    print(base_url)
+
     return OpenAI(api_key="http", base_url=base_url)
 
 def encode_image(image: BytesIO) -> str:
@@ -292,8 +309,10 @@ async def indic_custom_prompt_pdf(
         )
         response = custom_response.choices[0].message.content
 
+        sentences =split_into_sentences(response)
+
         translation_payload = {
-            "sentences": [response],
+            "sentences": sentences,
             "src_lang": source_language,
             "tgt_lang": target_language
         }
@@ -304,7 +323,8 @@ async def indic_custom_prompt_pdf(
         )
         translation_response.raise_for_status()
         translation_result = translation_response.json()
-        translated_response = translation_result["translations"][0]
+ 
+        translated_response = " ".join(translation_result["translations"])
 
         return JSONResponse(content={
             "original_text": extracted_text,
@@ -346,8 +366,10 @@ async def indic_summarize_pdf(
         )
         summary = summary_response.choices[0].message.content
 
+        sentences = split_into_sentences(summary)
+
         translation_payload = {
-            "sentences": [summary],
+            "sentences": sentences,
             "src_lang": src_lang,
             "tgt_lang": tgt_lang
         }
@@ -358,7 +380,8 @@ async def indic_summarize_pdf(
         )
         translation_response.raise_for_status()
         translation_result = translation_response.json()
-        translated_summary = translation_result["translations"][0]
+
+        translated_summary = " ".join(translation_result["translations"])
 
         return JSONResponse(content={
             "original_text": extracted_text,
@@ -398,9 +421,11 @@ async def indic_extract_text_from_pdf(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
 
+        sentences = split_into_sentences(page_content)
         try:
+            
             translation_payload = {
-                "sentences": [page_content],
+                "sentences": sentences,
                 "src_lang": src_lang,
                 "tgt_lang": tgt_lang
             }
@@ -411,7 +436,10 @@ async def indic_extract_text_from_pdf(
             )
             translation_response.raise_for_status()
             translation_result = translation_response.json()
-            translated_content = translation_result["translations"][0]
+
+            combined_translation = " ".join(translation_result["translations"])
+
+            translated_content = combined_translation
         except requests.exceptions.RequestException as e:
             raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
 
@@ -696,6 +724,119 @@ async def indic_visual_query(
 
         response = None
         text_to_translate = extracted_text
+
+        system_prompt = "You are dwani, a helpful assistant. Summarize your answer in maximum 1 sentence. If the answer contains numerical digits, convert the digits into words"
+
+        if source_language == "deu_Latn" or target_language == "deu_Latn":
+            system_prompt = system_prompt + " return the reponse in German "
+        result = {}
+        if prompt and prompt.strip():
+            client = get_openai_client(model)
+            custom_response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}]
+                    },
+                    {"role": "user", "content": f"{prompt}\n\n{extracted_text}"}
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
+            response = custom_response.choices[0].message.content
+            text_to_translate = response
+        elif prompt and not prompt.strip():
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+        if ( source_language == "deu_Latn" or target_language == "deu_Latn"):
+            result = {
+                "extracted_text": response,
+                "translated_response": response,
+            }
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            if response:
+                result["response"] = response
+
+            return JSONResponse(content=result)
+
+        if ( source_language == "eng_Latn" and target_language == "eng_Latn"):
+            result = {
+                "extracted_text": response,
+                "translated_response": response,
+            }
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            if response:
+                result["response"] = response
+
+            return JSONResponse(content=result)
+        else:
+
+            sentences = split_into_sentences(text_to_translate)
+            translation_payload = {
+                "sentences": sentences,
+                "src_lang": source_language,
+                "tgt_lang": target_language
+            }
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang={source_language}&tgt_lang={target_language}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+            translated_response = " ".join(translation_result["translations"])
+
+            result = {
+                "extracted_text": extracted_text,
+                "translated_response": translated_response,
+            }
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
+
+            if response:
+                result["response"] = response
+
+            return JSONResponse(content=result)
+
+
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error translating: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# Updated Visual Query Endpoint
+@app.post("/visual-query-direct/",
+          summary="Visual Query with Image",
+          description="Extract text from a PNG image using OCR, optionally process it with a custom prompt",
+          tags=["Chat"],
+          responses={
+              200: {"description": "Extracted text "},
+              400: {"description": "Invalid image, prompt"},
+              500: {"description": "OCR error"}
+          })
+async def indic_visual_query_direct(
+    request: Request,
+    file: UploadFile = File(..., description="PNG image file to analyze"),
+    prompt: Optional[str] = Form(None, description="Optional custom prompt to process the extracted text"),
+    model: str = Form("gemma3", description="LLM model", enum=["gemma3", "moondream", "smolvla"])
+):
+    try:
+        if not file.content_type.startswith("image/png"):
+            raise HTTPException(status_code=400, detail="Only PNG images supported")
+
+        logger.debug(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
+
+        image_bytes = await file.read()
+        image = BytesIO(image_bytes)
+        img_base64 = encode_image(image)
+        extracted_text = ocr_page_with_rolm(img_base64, model)
+
+        response = None
+        text_to_translate = extracted_text
         if prompt and prompt.strip():
             client = get_openai_client(model)
             custom_response = client.chat.completions.create(
@@ -711,32 +852,18 @@ async def indic_visual_query(
                 max_tokens=500
             )
             response = custom_response.choices[0].message.content
-            text_to_translate = response
+            
         elif prompt and not prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
 
-        translation_payload = {
-            "sentences": [text_to_translate],
-            "src_lang": source_language,
-            "tgt_lang": target_language
-        }
-        translation_response = requests.post(
-            f"{translation_api_url}/translate?src_lang={source_language}&tgt_lang={target_language}",
-            json=translation_payload,
-            headers={"accept": "application/json", "Content-Type": "application/json"}
-        )
-        translation_response.raise_for_status()
-        translation_result = translation_response.json()
-        translated_response = translation_result["translations"][0]
-
         result = {
             "extracted_text": extracted_text,
-            "translated_response": translated_response
+            "response": response
         }
         if response:
             result["response"] = response
 
-        logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
+        logger.debug(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
         return JSONResponse(content=result)
 
     except requests.exceptions.RequestException as e:
@@ -745,6 +872,7 @@ async def indic_visual_query(
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 class Settings:
     chat_rate_limit = "10/minute"
@@ -777,28 +905,145 @@ async def indic_chat(
 
     logger.debug(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
 
+    current_time = time_to_words()
     try:
         if chat_request.src_lang not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid source language: {chat_request.src_lang}")
         if chat_request.tgt_lang not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {chat_request.tgt_lang}")
 
+        system_prompt = f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"
         prompt_to_process = chat_request.prompt
-        if chat_request.src_lang != "eng_Latn":
-            translation_payload = {
-                "sentences": [chat_request.prompt],
-                "src_lang": chat_request.src_lang,
-                "tgt_lang": "eng_Latn"
-            }
-            translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang={chat_request.src_lang}&tgt_lang=eng_Latn",
-                json=translation_payload,
-                headers={"accept": "application/json", "Content-Type": "application/json"}
+        if (chat_request.tgt_lang == "deu_Latn"):
+            system_prompt = system_prompt + " return the reponse in German "
+            prompt_to_process = prompt_to_process + " return the response in German"
+
+
+        if (chat_request.src_lang == chat_request.tgt_lang  and chat_request.src_lang == 'eng_Latn' ) :
+                
+            current_time = time_to_words()
+            client = get_openai_client(chat_request.model)
+            response = client.chat.completions.create(
+                model=chat_request.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}]
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
+                ],
+                temperature=0.3,
+                max_tokens=settings.max_tokens
             )
-            translation_response.raise_for_status()
-            translation_result = translation_response.json()
-            prompt_to_process = translation_result["translations"][0]
-            logger.debug(f"Translated prompt to English: {prompt_to_process}")
+            generated_response = response.choices[0].message.content
+            logger.debug(f"Generated response: {generated_response}")
+            return JSONResponse(content={"response": generated_response})
+        
+        elif (chat_request.tgt_lang == "deu_Latn"):
+            system_prompt = system_prompt + " return the reponse in German "
+
+            current_time = time_to_words()
+            client = get_openai_client(chat_request.model)
+            response = client.chat.completions.create(
+                model=chat_request.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}]
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
+                ],
+                temperature=0.3,
+                max_tokens=settings.max_tokens
+            )
+            generated_response = response.choices[0].message.content
+            logger.debug(f"Generated response: {generated_response}")
+            return JSONResponse(content={"response": generated_response})
+
+        else :
+            sentences = split_into_sentences(prompt_to_process)
+            if chat_request.src_lang != "eng_Latn" :
+                translation_payload = {
+                    "sentences": sentences,
+                    "src_lang": chat_request.src_lang,
+                    "tgt_lang": "eng_Latn"
+                }
+                translation_response = requests.post(
+                    f"{translation_api_url}/translate?src_lang={chat_request.src_lang}&tgt_lang=eng_Latn",
+                    json=translation_payload,
+                    headers={"accept": "application/json", "Content-Type": "application/json"}
+                )
+                translation_response.raise_for_status()
+                translation_result = translation_response.json()
+                prompt_to_process = " ".join(translation_result["translations"])
+
+                logger.debug(f"Translated prompt to English: {prompt_to_process}")
+
+            client = get_openai_client(chat_request.model)
+            response = client.chat.completions.create(
+                model=chat_request.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}]
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
+                ],
+                temperature=0.3,
+                max_tokens=settings.max_tokens
+            )
+            generated_response = response.choices[0].message.content
+            logger.debug(f"Generated response: {generated_response}")
+
+            final_response = generated_response
+
+
+        if (chat_request.src_lang == chat_request.tgt_lang  and chat_request.src_lang == 'eng_Latn' ) :
+            pass
+        elif (chat_request.src_lang == chat_request.tgt_lang  and chat_request.src_lang == 'deu_Latn' ) :
+            pass
+        else :
+            sentences = split_into_sentences(final_response)
+            if chat_request.tgt_lang != "eng_Latn" :
+                translation_payload = {
+                    "sentences": sentences,
+                    "src_lang": "eng_Latn",
+                    "tgt_lang": chat_request.tgt_lang
+                }
+                translation_response = requests.post(
+                    f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={chat_request.tgt_lang}",
+                    json=translation_payload,
+                    headers={"accept": "application/json", "Content-Type": "application/json"}
+                )
+                translation_response.raise_for_status()
+                translation_result = translation_response.json()
+                final_response = " ".join(translation_result["translations"])
+                logger.debug(f"Translated response to {chat_request.tgt_lang}: {final_response}")
+
+                return JSONResponse(content={"response": final_response})
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Translation API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Translation API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/chat_direct")
+async def chat_direct(
+    request: Request,
+    chat_request: ChatDirectRequest,
+    settings=Depends(get_settings)
+):
+    if not chat_request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+
+    logger.debug(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
+
+    try:
+
+        prompt_to_process = chat_request.prompt
 
         current_time = time_to_words()
         client = get_openai_client(chat_request.model)
@@ -817,31 +1062,13 @@ async def indic_chat(
         generated_response = response.choices[0].message.content
         logger.debug(f"Generated response: {generated_response}")
 
-        final_response = generated_response
-        if chat_request.tgt_lang != "eng_Latn":
-            translation_payload = {
-                "sentences": [generated_response],
-                "src_lang": "eng_Latn",
-                "tgt_lang": chat_request.tgt_lang
-            }
-            translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={chat_request.tgt_lang}",
-                json=translation_payload,
-                headers={"accept": "application/json", "Content-Type": "application/json"}
-            )
-            translation_response.raise_for_status()
-            translation_result = translation_response.json()
-            final_response = translation_result["translations"][0]
-            logger.debug(f"Translated response to {chat_request.tgt_lang}: {final_response}")
 
-        return JSONResponse(content={"response": final_response})
+        return JSONResponse(content={"response": generated_response})
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Translation API error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Translation API error: {str(e)}")
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @app.middleware("http")
 async def add_request_timing(request: Request, call_next):

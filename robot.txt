@@ -1,0 +1,9 @@
+requests
+fastapi
+openai
+slowapi
+pillow
+python-multipart
+num2words
+pytz
+uvicorn
