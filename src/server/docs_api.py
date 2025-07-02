@@ -110,8 +110,8 @@ def get_openai_client(model: str) -> OpenAI:
         raise ValueError(f"Invalid model: {model}. Choose from: {', '.join(valid_models)}")
     
     model_ports = {
-        "qwen3": "7880",
-        "gemma3": "7881",
+        "qwen3": "9100",
+        "gemma3": "9000",
         "moondream": "7882",
         "qwen2.5vl": "7883",
         "sarvam-m": "7884",
