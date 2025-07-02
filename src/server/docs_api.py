@@ -1045,14 +1045,20 @@ async def chat_direct(
 
         prompt_to_process = chat_request.prompt
 
+        system_prompt = chat_request.system_prompt
+
         current_time = time_to_words()
+
+        dwani_prompt = f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}" 
         client = get_openai_client(chat_request.model)
         response = client.chat.completions.create(
             model=chat_request.model,
             messages=[
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
+                #    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
+                    "content": [{"type": "text", "text": system_prompt }]
+                
                 },
                 {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
             ],
