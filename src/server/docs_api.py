@@ -187,6 +187,45 @@ async def extract_text_from_pdf(
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+@app.post("/extract-text-all/")
+async def extract_text_from_pdf(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True)
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        page_contents = []
+        for page_number in range(num_pages):
+            try:
+                image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page: {str(e)}")
+
+            try:
+                page_content = ocr_page_with_rolm(image_base64, model)
+                page_contents.append(page_content)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+
+        os.remove(temp_file_path)
+        return JSONResponse(content={"page_contents": page_contents})
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
