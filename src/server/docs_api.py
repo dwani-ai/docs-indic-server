@@ -110,8 +110,8 @@ def get_openai_client(model: str) -> OpenAI:
         raise ValueError(f"Invalid model: {model}. Choose from: {', '.join(valid_models)}")
     
     model_ports = {
-        "qwen3": "7880",
-        "gemma3": "7881",
+        "qwen3": "9100",
+        "gemma3": "9000",
         "moondream": "7882",
         "qwen2.5vl": "7883",
         "sarvam-m": "7884",
@@ -186,6 +186,45 @@ async def extract_text_from_pdf(
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/extract-text-all/")
+async def extract_text_from_pdf(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True)
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        page_contents = []
+        for page_number in range(num_pages):
+            try:
+                image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page: {str(e)}")
+
+            try:
+                page_content = ocr_page_with_rolm(image_base64, model)
+                page_contents.append(page_content)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+
+        os.remove(temp_file_path)
+        return JSONResponse(content={"page_contents": page_contents})
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
@@ -1045,14 +1084,20 @@ async def chat_direct(
 
         prompt_to_process = chat_request.prompt
 
+        system_prompt = chat_request.system_prompt
+
         current_time = time_to_words()
+
+        dwani_prompt = f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}" 
         client = get_openai_client(chat_request.model)
         response = client.chat.completions.create(
             model=chat_request.model,
             messages=[
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
+                #    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
+                    "content": [{"type": "text", "text": system_prompt }]
+                
                 },
                 {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
             ],
