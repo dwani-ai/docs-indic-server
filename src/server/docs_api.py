@@ -189,7 +189,7 @@ async def extract_text_from_pdf(
 
 
 @app.post("/extract-text-all/")
-async def extract_text_from_pdf(
+async def extract_all_text_from_pdf(
     file: UploadFile = File(...),
     model: str = Body("gemma3", embed=True)
 ):
