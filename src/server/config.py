@@ -16,5 +16,6 @@ class AppConfig:
     MAX_TOKENS: int = 500
     OPENAI_API_KEY: str = "http"
     DEFAULT_MODEL: str = "gemma3"
+    log_level: str = "INFO"  # Add log_level set to INFO
 
 config = AppConfig()
