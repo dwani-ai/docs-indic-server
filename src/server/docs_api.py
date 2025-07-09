@@ -761,7 +761,7 @@ async def indic_visual_query(
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
 
-        logger.debug(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
+        logger.info(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
 
         image_bytes = await file.read()
         image = BytesIO(image_bytes)
@@ -800,7 +800,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -811,7 +811,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -837,7 +837,7 @@ async def indic_visual_query(
                 "extracted_text": extracted_text,
                 "translated_response": translated_response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
 
             if response:
                 result["response"] = response
@@ -874,7 +874,7 @@ async def indic_visual_query_direct(
         if not file.content_type.startswith("image/png"):
             raise HTTPException(status_code=400, detail="Only PNG images supported")
 
-        logger.debug(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
+        logger.info(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
 
         image_bytes = await file.read()
         image = BytesIO(image_bytes)
@@ -909,7 +909,7 @@ async def indic_visual_query_direct(
         if response:
             result["response"] = response
 
-        logger.debug(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
+        logger.info(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
         return JSONResponse(content=result)
 
     except requests.exceptions.RequestException as e:
@@ -949,7 +949,7 @@ async def indic_chat(
     if not chat_request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    logger.debug(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
+    logger.info(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
 
     current_time = time_to_words()
     try:
@@ -982,7 +982,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
         
         elif (chat_request.tgt_lang == "deu_Latn"):
@@ -1003,7 +1003,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
 
         else :
@@ -1023,7 +1023,7 @@ async def indic_chat(
                 translation_result = translation_response.json()
                 prompt_to_process = " ".join(translation_result["translations"])
 
-                logger.debug(f"Translated prompt to English: {prompt_to_process}")
+                logger.info(f"Translated prompt to English: {prompt_to_process}")
 
             client = get_openai_client(chat_request.model)
             response = client.chat.completions.create(
@@ -1039,7 +1039,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
 
             final_response = generated_response
 
@@ -1064,7 +1064,7 @@ async def indic_chat(
                 translation_response.raise_for_status()
                 translation_result = translation_response.json()
                 final_response = " ".join(translation_result["translations"])
-                logger.debug(f"Translated response to {chat_request.tgt_lang}: {final_response}")
+                logger.info(f"Translated response to {chat_request.tgt_lang}: {final_response}")
 
                 return JSONResponse(content={"response": final_response})
 
@@ -1085,7 +1085,7 @@ async def chat_direct(
     if not chat_request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    logger.debug(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
+    logger.info(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
 
     try:
 
@@ -1112,7 +1112,7 @@ async def chat_direct(
             max_tokens=settings.max_tokens
         )
         generated_response = response.choices[0].message.content
-        logger.debug(f"Generated response: {generated_response}")
+        logger.info(f"Generated response: {generated_response}")
 
 
         return JSONResponse(content={"response": generated_response})
