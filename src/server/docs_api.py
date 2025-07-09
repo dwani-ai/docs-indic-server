@@ -169,6 +169,7 @@ async def extract_text_from_pdf(
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
 
+        print(page_number)
         try:
             image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
         except Exception as e:
@@ -1138,5 +1139,4 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=7864, help="Port to bind (default: 7864)")
     args = parser.parse_args()
-    #uvicorn.run(app, host=args.host, port=args.port, log_level="info", log_config=logger)
     uvicorn.run(app, host=args.host, port=args.port)
