@@ -1138,5 +1138,5 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=7864, help="Port to bind (default: 7864)")
     args = parser.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", log_config=logger)
-    #uvicorn.run(app, host=args.host, port=args.port)
+    #uvicorn.run(app, host=args.host, port=args.port, log_level="info", log_config=logger)
+    uvicorn.run(app, host=args.host, port=args.port)
