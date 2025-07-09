@@ -405,6 +405,14 @@ async def indic_summarize_pdf(
         )
         summary = summary_response.choices[0].message.content
 
+        if(tgt_lang == "eng_Latn" or tgt_lang == "deu_Latn"):
+            return JSONResponse(content={
+            "original_text": extracted_text,
+            "summary": summary,
+            "translated_summary": summary,
+            "processed_page": page_number
+        })
+
         sentences = split_into_sentences(summary)
 
         translation_payload = {
