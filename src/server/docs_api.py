@@ -169,7 +169,6 @@ async def extract_text_from_pdf(
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
 
-        print(page_number)
         try:
             image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
         except Exception as e:
