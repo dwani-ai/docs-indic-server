@@ -204,7 +204,7 @@ async def extract_all_text_from_pdf(
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
 
-        page_contents = []
+        page_contents = {}
         for page_number in range(num_pages):
             try:
                 image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
@@ -213,19 +213,18 @@ async def extract_all_text_from_pdf(
 
             try:
                 page_content = ocr_page_with_rolm(image_base64, model)
-                page_contents.append(page_content)
+                page_contents[str(page_number)] = page_content
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
 
         os.remove(temp_file_path)
-        return JSONResponse(content={"page_contents": page_contents})
+        return JSONResponse(content=page_contents)
 
     except Exception as e:
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
+    
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
