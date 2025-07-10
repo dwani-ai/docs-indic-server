@@ -442,6 +442,76 @@ async def indic_summarize_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+
+@app.post("/indic-summarize-pdf-all")
+async def indic_summarize_pdf_all(
+    file: UploadFile = File(...),
+    tgt_lang: str = Body("kan_Knda", embed=True),
+    model: str = Body("gemma3", embed=True)
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+
+        text_response = await extract_all_text_from_pdf(file, model)
+
+        page_contents = text_response.body
+        page_contents_dict = json.loads(page_contents.decode())["page_contents"]
+
+        # Convert the dictionary values to a single string
+        text_response_string = "\n".join(page_contents_dict.values())
+        '''    
+        extracted_text = text_response.body.decode("utf-8")
+        extracted_json = json.loads(extracted_text)
+        extracted_text = extracted_json["page_content"]
+        '''
+        client = get_openai_client(model)
+        summary_response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": f"Summarize the following text in 3-5 sentences:\n\n{text_response_string}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        summary = summary_response.choices[0].message.content
+
+        if(tgt_lang == "eng_Latn" or tgt_lang == "deu_Latn"):
+            return JSONResponse(content={
+            "original_text": text_response_string,
+            "summary": summary,
+            "translated_summary": summary,
+        })
+
+        sentences = split_into_sentences(summary)
+
+        translation_payload = {
+            "sentences": sentences,
+            "tgt_lang": tgt_lang
+        }
+        translation_response = requests.post(
+            f"{translation_api_url}/translate?src_lang=english&tgt_lang={tgt_lang}",
+            json=translation_payload,
+            headers={"accept": "application/json", "Content-Type": "application/json"}
+        )
+        translation_response.raise_for_status()
+        translation_result = translation_response.json()
+
+        translated_summary = " ".join(translation_result["translations"])
+
+        return JSONResponse(content={
+            "original_text": text_response_string,
+            "summary": summary,
+            "translated_summary": translated_summary,
+        })
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/indic-extract-text/")
 async def indic_extract_text_from_pdf(
     file: UploadFile = File(...),
