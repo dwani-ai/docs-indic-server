@@ -218,7 +218,8 @@ async def extract_all_text_from_pdf(
                 raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
 
         os.remove(temp_file_path)
-        return JSONResponse(content=page_contents)
+
+        return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
         if 'temp_file_path' in locals():
