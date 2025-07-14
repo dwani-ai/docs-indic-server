@@ -442,7 +442,90 @@ async def indic_summarize_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+async def extract_text_batch_from_pdf(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True)
+) -> JSONResponse:
+    """Extract text from all PDF pages in a single batch request."""
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
 
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        messages = []
+        page_images = []
+        
+        for page_number in range(num_pages):
+            try:
+                image_base64 = render_pdf_to_base64png(
+                    temp_file_path, 
+                    page_number, 
+                    target_longest_image_dim=1024
+                )
+                page_images.append(image_base64)
+                messages.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                })
+            except Exception as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
+
+        messages.append({
+            "type": "text",
+            "text": (
+                f"Extract plain text from these {num_pages} PDF pages. "
+                "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+                "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted "
+                "and does not include markdown code blocks or any text outside the JSON object."
+            )
+        })
+
+        try:
+            client = get_openai_client(model)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": messages}],
+                temperature=0.2,
+                max_tokens=50000
+            )
+            
+            raw_response = response.choices[0].message.content
+            print("Raw response:", raw_response)  # Debugging
+            
+            # Clean markdown code blocks
+            cleaned_response = raw_response
+            if raw_response.startswith("```json") and raw_response.endswith("```"):
+                cleaned_response = raw_response[7:-3].strip()
+            elif raw_response.startswith("```") and raw_response.endswith("```"):
+                cleaned_response = raw_response[3:-3].strip()
+            
+            try:
+                page_contents = json.loads(cleaned_response)
+                print("Parsed page contents:", page_contents)
+            except json.JSONDecodeError as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to parse OCR response as JSON: {str(e)}")
+
+            os.remove(temp_file_path)
+            return JSONResponse(content={"page_contents": page_contents})
+
+        except Exception as e:
+            os.remove(temp_file_path)
+            raise HTTPException(status_code=500, detail=f"OCR batch processing failed: {str(e)}")
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+'''    
 
 async def extract_text_batch_from_pdf(
     file: UploadFile = File(...),
@@ -490,13 +573,13 @@ async def extract_text_batch_from_pdf(
                 "and does not include any additional text or comments outside the JSON object."
             )
         })
-        '''
+        
         # Add final text instruction
         messages.append({
             "type": "text",
             "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
         })
-        '''
+        
         #print(messages)
         try:
             client = get_openai_client(model)
@@ -534,7 +617,7 @@ async def extract_text_batch_from_pdf(
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
+'''
 import requests
 import json
 import re
