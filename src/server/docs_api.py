@@ -189,7 +189,7 @@ async def extract_text_from_pdf(
 
 
 @app.post("/extract-text-all/")
-async def extract_text_from_pdf(
+async def extract_all_text_from_pdf(
     file: UploadFile = File(...),
     model: str = Body("gemma3", embed=True)
 ):
@@ -204,7 +204,7 @@ async def extract_text_from_pdf(
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
 
-        page_contents = []
+        page_contents = {}
         for page_number in range(num_pages):
             try:
                 image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
@@ -213,19 +213,19 @@ async def extract_text_from_pdf(
 
             try:
                 page_content = ocr_page_with_rolm(image_base64, model)
-                page_contents.append(page_content)
+                page_contents[str(page_number)] = page_content
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
 
         os.remove(temp_file_path)
+
         return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
+    
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
@@ -405,6 +405,14 @@ async def indic_summarize_pdf(
         )
         summary = summary_response.choices[0].message.content
 
+        if(tgt_lang == "eng_Latn" or tgt_lang == "deu_Latn"):
+            return JSONResponse(content={
+            "original_text": extracted_text,
+            "summary": summary,
+            "translated_summary": summary,
+            "processed_page": page_number
+        })
+
         sentences = split_into_sentences(summary)
 
         translation_payload = {
@@ -433,6 +441,179 @@ async def indic_summarize_pdf(
         raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+async def extract_text_batch_from_pdf(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True)
+) -> JSONResponse:
+    """Extract text from all PDF pages in a single batch request."""
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        messages = []
+        page_images = []
+        
+        for page_number in range(num_pages):
+            try:
+                image_base64 = render_pdf_to_base64png(
+                    temp_file_path, 
+                    page_number, 
+                    target_longest_image_dim=1024
+                )
+                page_images.append(image_base64)
+                messages.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                })
+            except Exception as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
+
+        messages.append({
+            "type": "text",
+            "text": (
+                f"Extract plain text from these {num_pages} PDF pages. "
+                "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+                "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted "
+                "and does not include markdown code blocks or any text outside the JSON object."
+            )
+        })
+
+        try:
+            client = get_openai_client(model)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": messages}],
+                temperature=0.2,
+                max_tokens=50000
+            )
+            
+            raw_response = response.choices[0].message.content
+            #print("Raw response:", raw_response)  # Debugging
+            
+            # Clean markdown code blocks
+            cleaned_response = raw_response
+            if raw_response.startswith("```json") and raw_response.endswith("```"):
+                cleaned_response = raw_response[7:-3].strip()
+            elif raw_response.startswith("```") and raw_response.endswith("```"):
+                cleaned_response = raw_response[3:-3].strip()
+            
+            try:
+                page_contents = json.loads(cleaned_response)
+                #print("Parsed page contents:", page_contents)
+            except json.JSONDecodeError as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to parse OCR response as JSON: {str(e)}")
+
+            os.remove(temp_file_path)
+            return JSONResponse(content={"page_contents": page_contents})
+
+        except Exception as e:
+            os.remove(temp_file_path)
+            raise HTTPException(status_code=500, detail=f"OCR batch processing failed: {str(e)}")
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+import requests
+import json
+import re
+from fastapi import UploadFile, File, Body, HTTPException
+from fastapi.responses import JSONResponse
+
+def split_into_sentences(text: str) -> list:
+    """Split text into sentences using basic regex."""
+    if not text:
+        return []
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s for s in sentences if s]
+
+@app.post("/indic-summarize-pdf-all")
+async def indic_summarize_pdf_all(
+    file: UploadFile = File(...),
+    tgt_lang: str = Body("kan_Knda", embed=True),
+    model: str = Body("gemma3", embed=True)  # Use same model as OCR
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+
+        text_response = await extract_text_batch_from_pdf(file, model)
+
+        page_contents_dict = json.loads(text_response.body.decode())["page_contents"]
+        
+        if not page_contents_dict:
+            raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
+
+        # Convert dictionary values to a single string
+        text_response_string = "\n".join(str(value) for value in page_contents_dict.values() if value)
+        
+        if not text_response_string.strip():
+            raise HTTPException(status_code=500, detail="Extracted text is empty")
+
+        client = get_openai_client(model)
+        summary_response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": f"Summarize the following text in 3-5 sentences in English:\n\n{text_response_string}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        summary = summary_response.choices[0].message.content
+        
+        if not summary:
+            raise HTTPException(status_code=500, detail="Summary generation failed")
+
+        if tgt_lang in ["eng_Latn", "deu_Latn"]:
+            return JSONResponse(content={
+                "original_text": text_response_string,
+                "summary": summary,
+                "translated_summary": summary,
+            })
+
+        sentences = split_into_sentences(summary)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
+
+        translation_payload = {
+            "sentences": sentences,
+            "tgt_lang": tgt_lang
+        }
+        try:
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang=english&tgt_lang={tgt_lang}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
+
+        translated_summary = " ".join(translation_result.get("translations", []))
+        if not translated_summary:
+            raise HTTPException(status_code=500, detail="Translation API returned empty translations")
+
+        return JSONResponse(content={
+            "original_text": text_response_string,
+            "summary": summary,
+            "translated_summary": translated_summary,
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @app.post("/indic-extract-text/")
 async def indic_extract_text_from_pdf(
@@ -754,7 +935,7 @@ async def indic_visual_query(
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
 
-        logger.debug(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
+        logger.info(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
 
         image_bytes = await file.read()
         image = BytesIO(image_bytes)
@@ -793,7 +974,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -804,7 +985,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -830,7 +1011,7 @@ async def indic_visual_query(
                 "extracted_text": extracted_text,
                 "translated_response": translated_response,
             }
-            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
+            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
 
             if response:
                 result["response"] = response
@@ -867,7 +1048,7 @@ async def indic_visual_query_direct(
         if not file.content_type.startswith("image/png"):
             raise HTTPException(status_code=400, detail="Only PNG images supported")
 
-        logger.debug(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
+        logger.info(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
 
         image_bytes = await file.read()
         image = BytesIO(image_bytes)
@@ -902,7 +1083,7 @@ async def indic_visual_query_direct(
         if response:
             result["response"] = response
 
-        logger.debug(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
+        logger.info(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
         return JSONResponse(content=result)
 
     except requests.exceptions.RequestException as e:
@@ -942,7 +1123,7 @@ async def indic_chat(
     if not chat_request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    logger.debug(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
+    logger.info(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
 
     current_time = time_to_words()
     try:
@@ -975,7 +1156,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
         
         elif (chat_request.tgt_lang == "deu_Latn"):
@@ -996,7 +1177,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
 
         else :
@@ -1016,7 +1197,7 @@ async def indic_chat(
                 translation_result = translation_response.json()
                 prompt_to_process = " ".join(translation_result["translations"])
 
-                logger.debug(f"Translated prompt to English: {prompt_to_process}")
+                logger.info(f"Translated prompt to English: {prompt_to_process}")
 
             client = get_openai_client(chat_request.model)
             response = client.chat.completions.create(
@@ -1032,7 +1213,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.debug(f"Generated response: {generated_response}")
+            logger.info(f"Generated response: {generated_response}")
 
             final_response = generated_response
 
@@ -1057,7 +1238,7 @@ async def indic_chat(
                 translation_response.raise_for_status()
                 translation_result = translation_response.json()
                 final_response = " ".join(translation_result["translations"])
-                logger.debug(f"Translated response to {chat_request.tgt_lang}: {final_response}")
+                logger.info(f"Translated response to {chat_request.tgt_lang}: {final_response}")
 
                 return JSONResponse(content={"response": final_response})
 
@@ -1078,7 +1259,7 @@ async def chat_direct(
     if not chat_request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    logger.debug(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
+    logger.info(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
 
     try:
 
@@ -1105,7 +1286,7 @@ async def chat_direct(
             max_tokens=settings.max_tokens
         )
         generated_response = response.choices[0].message.content
-        logger.debug(f"Generated response: {generated_response}")
+        logger.info(f"Generated response: {generated_response}")
 
 
         return JSONResponse(content={"response": generated_response})
