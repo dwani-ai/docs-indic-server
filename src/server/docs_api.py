@@ -506,6 +506,7 @@ async def extract_text_batch_from_pdf(
                 os.remove(temp_file_path)
                 raise HTTPException(status_code=500, detail="Failed to parse OCR response as JSON")
 
+            print(page_contents)
             os.remove(temp_file_path)
             return JSONResponse(content={"page_contents": page_contents})
 
