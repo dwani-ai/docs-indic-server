@@ -510,7 +510,7 @@ async def extract_text_batch_from_pdf(
                 max_tokens=50000
             )
 
-            #print(response)
+            print(response)
             
             # Parse the response as JSON
             try:
