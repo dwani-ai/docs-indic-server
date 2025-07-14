@@ -481,12 +481,22 @@ async def extract_text_batch_from_pdf(
                 os.remove(temp_file_path)
                 raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
 
+        messages.append({
+            "type": "text",
+            "text": (
+                f"Extract plain text from these {num_pages} PDF pages. "
+                "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+                "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted "
+                "and does not include any additional text or comments outside the JSON object."
+            )
+        })
+        '''
         # Add final text instruction
         messages.append({
             "type": "text",
             "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
         })
-
+        '''
         #print(messages)
         try:
             client = get_openai_client(model)
