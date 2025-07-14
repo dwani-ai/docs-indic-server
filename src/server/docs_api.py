@@ -487,6 +487,7 @@ async def extract_text_batch_from_pdf(
             "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
         })
 
+        print(messages)
         try:
             client = get_openai_client(model)
             response = client.chat.completions.create(
