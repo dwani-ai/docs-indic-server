@@ -496,7 +496,7 @@ async def extract_text_batch_from_pdf(
                     "content": messages
                 }],
                 temperature=0.2,
-                max_tokens=4096
+                max_tokens=50000
             )
             
             # Parse the response as JSON
