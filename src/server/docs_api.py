@@ -497,7 +497,7 @@ async def extract_text_batch_from_pdf(
             )
             
             raw_response = response.choices[0].message.content
-            print("Raw response:", raw_response)  # Debugging
+            #print("Raw response:", raw_response)  # Debugging
             
             # Clean markdown code blocks
             cleaned_response = raw_response
@@ -508,7 +508,7 @@ async def extract_text_batch_from_pdf(
             
             try:
                 page_contents = json.loads(cleaned_response)
-                print("Parsed page contents:", page_contents)
+                #print("Parsed page contents:", page_contents)
             except json.JSONDecodeError as e:
                 os.remove(temp_file_path)
                 raise HTTPException(status_code=500, detail=f"Failed to parse OCR response as JSON: {str(e)}")
