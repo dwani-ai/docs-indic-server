@@ -524,100 +524,7 @@ async def extract_text_batch_from_pdf(
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-    
-'''    
 
-async def extract_text_batch_from_pdf(
-    file: UploadFile = File(...),
-    model: str = Body("gemma3", embed=True)
-) -> JSONResponse:
-    """Extract text from all PDF pages in a single batch request."""
-    try:
-        if not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files supported.")
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            temp_file.write(await file.read())
-            temp_file_path = temp_file.name
-
-        with pdfplumber.open(temp_file_path) as pdf:
-            num_pages = len(pdf.pages)
-
-        # Prepare batch message with all pages
-        messages = []
-        page_images = []
-        
-        # Convert all pages to base64 images
-        for page_number in range(num_pages):
-            try:
-                image_base64 = render_pdf_to_base64png(
-                    temp_file_path, 
-                    page_number, 
-                    target_longest_image_dim=1024
-                )
-                page_images.append(image_base64)
-                messages.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
-                })
-            except Exception as e:
-                os.remove(temp_file_path)
-                raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
-
-        messages.append({
-            "type": "text",
-            "text": (
-                f"Extract plain text from these {num_pages} PDF pages. "
-                "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
-                "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted "
-                "and does not include any additional text or comments outside the JSON object."
-            )
-        })
-        
-        # Add final text instruction
-        messages.append({
-            "type": "text",
-            "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
-        })
-        
-        #print(messages)
-        try:
-            client = get_openai_client(model)
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{
-                    "role": "user",
-                    "content": messages
-                }],
-                temperature=0.2,
-                max_tokens=50000
-            )
-
-            print(response)
-            
-            # Parse the response as JSON
-            try:
-                page_contents = json.loads(response.choices[0].message.content)
-
-                print("Andswqer")
-                print(page_contents)
-            except json.JSONDecodeError:
-                os.remove(temp_file_path)
-                raise HTTPException(status_code=500, detail="Failed to parse OCR response as JSON")
-
-            print(page_contents)
-            os.remove(temp_file_path)
-            return JSONResponse(content={"page_contents": page_contents})
-
-        except Exception as e:
-            os.remove(temp_file_path)
-            raise HTTPException(status_code=500, detail=f"OCR batch processing failed: {str(e)}")
-
-    except Exception as e:
-        if 'temp_file_path' in locals():
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-'''
 import requests
 import json
 import re
@@ -643,18 +550,14 @@ async def indic_summarize_pdf_all(
 
         text_response = await extract_text_batch_from_pdf(file, model)
 
-        print("function-returned values")
-        print(text_response)
         page_contents_dict = json.loads(text_response.body.decode())["page_contents"]
-        print(f"Extracted page contents: {page_contents_dict}")  # Debug
-
+        
         if not page_contents_dict:
             raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
 
         # Convert dictionary values to a single string
         text_response_string = "\n".join(str(value) for value in page_contents_dict.values() if value)
-        print(f"Combined text: {text_response_string}")  # Debug
-
+        
         if not text_response_string.strip():
             raise HTTPException(status_code=500, detail="Extracted text is empty")
 
@@ -668,8 +571,7 @@ async def indic_summarize_pdf_all(
             max_tokens=500
         )
         summary = summary_response.choices[0].message.content
-        print(f"Summary: {summary}")  # Debug
-
+        
         if not summary:
             raise HTTPException(status_code=500, detail="Summary generation failed")
 
@@ -681,7 +583,6 @@ async def indic_summarize_pdf_all(
             })
 
         sentences = split_into_sentences(summary)
-        print(f"Sentences for translation: {sentences}")  # Debug
         if not sentences:
             raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
 
@@ -697,7 +598,6 @@ async def indic_summarize_pdf_all(
             )
             translation_response.raise_for_status()
             translation_result = translation_response.json()
-            print(f"Translation response: {translation_result}")  # Debug
         except requests.exceptions.RequestException as e:
             raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
 
@@ -714,91 +614,6 @@ async def indic_summarize_pdf_all(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-'''
-import requests
-import json
-from fastapi import UploadFile, File, Body, HTTPException
-from fastapi.responses import JSONResponse
-
-def split_into_sentences(text: str) -> list:
-    """Basic sentence splitter using period, question mark, or exclamation mark."""
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s for s in sentences if s]
-
-@app.post("/indic-summarize-pdf-all")
-async def indic_summarize_pdf_all(
-    file: UploadFile = File(...),
-    tgt_lang: str = Body("kan_Knda", embed=True),
-    model: str = Body("gemma3", embed=True)  # Match vision-capable model
-):
-    try:
-        if not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files supported.")
-
-        text_response = await extract_text_batch_from_pdf(file, model)
-        page_contents_dict = text_response.body
-        page_contents_dict = json.loads(page_contents_dict.decode())["page_contents"]
-
-        if not page_contents_dict:
-            raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
-
-        # Convert the dictionary values to a single string
-        text_response_string = "\n".join(str(value) for value in page_contents_dict.values())
-        print(f"Extracted text: {text_response_string}")  # Debug extracted text
-
-        client = get_openai_client(model)
-        summary_response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "user", "content": f"Summarize the following text in 3-5 sentences:\n\n{text_response_string}"}
-            ],
-            temperature=0.3,
-            max_tokens=500
-        )
-        summary = summary_response.choices[0].message.content
-        print(f"Summary: {summary}")  # Debug summary
-
-        if not summary:
-            raise HTTPException(status_code=500, detail="Summary generation failed")
-
-        if tgt_lang in ["eng_Latn", "deu_Latn"]:
-            return JSONResponse(content={
-                "original_text": text_response_string,
-                "summary": summary,
-                "translated_summary": summary,
-            })
-
-        sentences = split_into_sentences(summary)
-        if not sentences:
-            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
-
-        translation_payload = {
-            "sentences": sentences,
-            "tgt_lang": tgt_lang
-        }
-        translation_response = requests.post(
-            f"{translation_api_url}/translate?src_lang=english&tgt_lang={tgt_lang}",
-            json=translation_payload,
-            headers={"accept": "application/json", "Content-Type": "application/json"}
-        )
-        translation_response.raise_for_status()
-        translation_result = translation_response.json()
-
-        translated_summary = " ".join(translation_result["translations"])
-        print(f"Translated summary: {translated_summary}")  # Debug translation
-
-        return JSONResponse(content={
-            "original_text": text_response_string,
-            "summary": summary,
-            "translated_summary": translated_summary,
-        })
-
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-'''    
 
 @app.post("/indic-extract-text/")
 async def indic_extract_text_from_pdf(
