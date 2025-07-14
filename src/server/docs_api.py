@@ -520,28 +520,38 @@ async def extract_text_batch_from_pdf(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+import requests
+import json
+from fastapi import UploadFile, File, Body, HTTPException
+from fastapi.responses import JSONResponse
+
+def split_into_sentences(text: str) -> list:
+    """Basic sentence splitter using period, question mark, or exclamation mark."""
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s for s in sentences if s]
+
 @app.post("/indic-summarize-pdf-all")
 async def indic_summarize_pdf_all(
     file: UploadFile = File(...),
     tgt_lang: str = Body("kan_Knda", embed=True),
-    model: str = Body("gemma3", embed=True)
+    model: str = Body("gemma3", embed=True)  # Match vision-capable model
 ):
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
 
         text_response = await extract_text_batch_from_pdf(file, model)
+        page_contents_dict = text_response.body
+        page_contents_dict = json.loads(page_contents_dict.decode())["page_contents"]
 
-        page_contents = text_response.body
-        page_contents_dict = json.loads(page_contents.decode())["page_contents"]
+        if not page_contents_dict:
+            raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
 
         # Convert the dictionary values to a single string
-        text_response_string = "\n".join(page_contents_dict.values())
-        '''    
-        extracted_text = text_response.body.decode("utf-8")
-        extracted_json = json.loads(extracted_text)
-        extracted_text = extracted_json["page_content"]
-        '''
+        text_response_string = "\n".join(str(value) for value in page_contents_dict.values())
+        print(f"Extracted text: {text_response_string}")  # Debug extracted text
+
         client = get_openai_client(model)
         summary_response = client.chat.completions.create(
             model=model,
@@ -552,15 +562,21 @@ async def indic_summarize_pdf_all(
             max_tokens=500
         )
         summary = summary_response.choices[0].message.content
+        print(f"Summary: {summary}")  # Debug summary
 
-        if(tgt_lang == "eng_Latn" or tgt_lang == "deu_Latn"):
+        if not summary:
+            raise HTTPException(status_code=500, detail="Summary generation failed")
+
+        if tgt_lang in ["eng_Latn", "deu_Latn"]:
             return JSONResponse(content={
-            "original_text": text_response_string,
-            "summary": summary,
-            "translated_summary": summary,
-        })
+                "original_text": text_response_string,
+                "summary": summary,
+                "translated_summary": summary,
+            })
 
         sentences = split_into_sentences(summary)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
 
         translation_payload = {
             "sentences": sentences,
@@ -575,6 +591,7 @@ async def indic_summarize_pdf_all(
         translation_result = translation_response.json()
 
         translated_summary = " ".join(translation_result["translations"])
+        print(f"Translated summary: {translated_summary}")  # Debug translation
 
         return JSONResponse(content={
             "original_text": text_response_string,
@@ -586,7 +603,7 @@ async def indic_summarize_pdf_all(
         raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
+    
 
 @app.post("/indic-extract-text/")
 async def indic_extract_text_from_pdf(
