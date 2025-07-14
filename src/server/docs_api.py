@@ -487,7 +487,7 @@ async def extract_text_batch_from_pdf(
             "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
         })
 
-        print(messages)
+        #print(messages)
         try:
             client = get_openai_client(model)
             response = client.chat.completions.create(
@@ -500,11 +500,14 @@ async def extract_text_batch_from_pdf(
                 max_tokens=50000
             )
 
-            print(response)
+            #print(response)
             
             # Parse the response as JSON
             try:
                 page_contents = json.loads(response.choices[0].message.content)
+
+                print("Andswqer")
+                print(page_contents)
             except json.JSONDecodeError:
                 os.remove(temp_file_path)
                 raise HTTPException(status_code=500, detail="Failed to parse OCR response as JSON")
