@@ -444,6 +444,81 @@ async def indic_summarize_pdf(
 
 
 
+async def extract_text_batch_from_pdf(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True)
+) -> JSONResponse:
+    """Extract text from all PDF pages in a single batch request."""
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        # Prepare batch message with all pages
+        messages = []
+        page_images = []
+        
+        # Convert all pages to base64 images
+        for page_number in range(num_pages):
+            try:
+                image_base64 = render_pdf_to_base64png(
+                    temp_file_path, 
+                    page_number, 
+                    target_longest_image_dim=1024
+                )
+                page_images.append(image_base64)
+                messages.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                })
+            except Exception as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
+
+        # Add final text instruction
+        messages.append({
+            "type": "text",
+            "text": f"Extract plain text from these {num_pages} PDF pages. Return the results as a JSON object where keys are page numbers (starting from 0) and values are the extracted text for each page."
+        })
+
+        try:
+            client = get_openai_client(model)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": messages
+                }],
+                temperature=0.2,
+                max_tokens=4096
+            )
+            
+            # Parse the response as JSON
+            try:
+                page_contents = json.loads(response.choices[0].message.content)
+            except json.JSONDecodeError:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail="Failed to parse OCR response as JSON")
+
+            os.remove(temp_file_path)
+            return JSONResponse(content={"page_contents": page_contents})
+
+        except Exception as e:
+            os.remove(temp_file_path)
+            raise HTTPException(status_code=500, detail=f"OCR batch processing failed: {str(e)}")
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/indic-summarize-pdf-all")
 async def indic_summarize_pdf_all(
     file: UploadFile = File(...),
@@ -454,7 +529,7 @@ async def indic_summarize_pdf_all(
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
 
-        text_response = await extract_all_text_from_pdf(file, model)
+        text_response = await extract_text_batch_from_pdf(file, model)
 
         page_contents = text_response.body
         page_contents_dict = json.loads(page_contents.decode())["page_contents"]
