@@ -546,6 +546,9 @@ async def indic_summarize_pdf_all(
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
 
         text_response = await extract_text_batch_from_pdf(file, model)
+
+        print("function-returned values")
+        print(text_response)
         page_contents_dict = json.loads(text_response.body.decode())["page_contents"]
         print(f"Extracted page contents: {page_contents_dict}")  # Debug
 
