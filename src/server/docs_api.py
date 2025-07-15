@@ -420,6 +420,94 @@ async def indic_custom_prompt_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+@app.post("/indic-custom-prompt-pdf-all")
+async def indic_custom_prompt_pdf_all(
+    file: UploadFile = File(...),
+    prompt: str = Body(..., embed=True),
+    query_language: str = Body("eng_Latn", embed=True),
+    target_language: str = Body("kan_Knda", embed=True),
+    model: str = Body("gemma3", embed=True)
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        if not prompt.strip():
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+        if query_language not in language_options:
+            raise HTTPException(status_code=400, detail=f"Invalid source language: {query_language}")
+        if target_language not in language_options:
+            raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
+
+        text_response = await extract_text_batch_from_pdf(file, model)
+
+        page_contents_dict = json.loads(text_response.body.decode())["page_contents"]
+        
+        if not page_contents_dict:
+            raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
+
+        # Convert dictionary values to a single string
+        text_response_string = "\n".join(str(value) for value in page_contents_dict.values() if value)
+        
+        if not text_response_string.strip():
+            raise HTTPException(status_code=500, detail="Extracted text is empty")
+
+        client = get_openai_client(model)
+        custom_response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": f"{prompt}\n\n{text_response_string}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        summary = custom_response.choices[0].message.content
+        
+        if not summary:
+            raise HTTPException(status_code=500, detail="PDF Query generation failed")
+
+        if target_language in ["eng_Latn", "deu_Latn"]:
+            return JSONResponse(content={
+                "original_text": text_response_string,
+                "query_answer": summary,
+                "translated_query_answer": summary,
+            })
+
+        sentences = split_into_sentences(summary)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
+
+        translation_payload = {
+            "sentences": sentences,
+            "tgt_lang": target_language
+        }
+        try:
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang=english&tgt_lang={target_language}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
+
+        translated_summary = " ".join(translation_result.get("translations", []))
+        if not translated_summary:
+            raise HTTPException(status_code=500, detail="Translation API returned empty translations")
+
+        return JSONResponse(content={
+            "original_text": text_response_string,
+            "query_answer": summary,
+            "translated_query_answer": translated_summary,
+        })
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/indic-summarize-pdf")
 async def indic_summarize_pdf(
     file: UploadFile = File(...),
