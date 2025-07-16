@@ -396,6 +396,7 @@ async def indic_custom_prompt_pdf(
                 "original_text": extracted_text,
                 "query_answer": response,
                 "translated_query_answer": response,
+                "processed_page": page_number
             })
 
         sentences = split_into_sentences(response)
@@ -425,6 +426,7 @@ async def indic_custom_prompt_pdf(
             "original_text": extracted_text,
             "query_answer": response,
             "translated_query_answer": translated_summary,
+            "processed_page": page_number
         })
 
     except requests.exceptions.RequestException as e:
