@@ -406,6 +406,7 @@ async def indic_custom_prompt_pdf(
 
         translation_payload = {
             "sentences": sentences,
+            "src_lang" : "eng_Latn",
             "tgt_lang": target_language
         }
         try:
@@ -496,6 +497,7 @@ async def indic_custom_prompt_pdf_all(
 
         translation_payload = {
             "sentences": sentences,
+            "src_lang": "eng_Latn",
             "tgt_lang": target_language
         }
         try:
