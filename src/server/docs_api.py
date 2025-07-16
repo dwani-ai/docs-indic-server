@@ -399,7 +399,6 @@ async def indic_custom_prompt_pdf(
                 "processed_page": page_number
             })
 
-        print(response)
         sentences = split_into_sentences(response)
         if not sentences:
             raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
@@ -424,8 +423,6 @@ async def indic_custom_prompt_pdf(
         if not translated_summary:
             raise HTTPException(status_code=500, detail="Translation API returned empty translations")
 
-        print("hello")
-        print(translated_summary)
         return JSONResponse(content={
             "original_text": extracted_text,
             "query_answer": response,
@@ -738,6 +735,7 @@ async def indic_summarize_pdf_all(
 
         translation_payload = {
             "sentences": sentences,
+            "src_lang" : "eng_Latn",
             "tgt_lang": tgt_lang
         }
         try:
