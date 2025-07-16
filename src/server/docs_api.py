@@ -361,7 +361,7 @@ async def indic_custom_prompt_pdf(
     file: UploadFile = File(...),
     page_number: int = Body(1, embed=True, ge=1),
     prompt: str = Body(..., embed=True),
-    source_language: str = Body("eng_Latn", embed=True),
+    query_language: str = Body("eng_Latn", embed=True),
     target_language: str = Body("kan_Knda", embed=True),
     model: str = Body("gemma3", embed=True)
 ):
@@ -370,7 +370,7 @@ async def indic_custom_prompt_pdf(
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
         if not prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-        if source_language not in language_options:
+        if query_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid source language: {source_language}")
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
@@ -391,28 +391,40 @@ async def indic_custom_prompt_pdf(
         )
         response = custom_response.choices[0].message.content
 
-        sentences =split_into_sentences(response)
+        if target_language in ["eng_Latn", "deu_Latn"]:
+            return JSONResponse(content={
+                "original_text": extracted_text,
+                "query_answer": response,
+                "translated_query_answer": response,
+            })
+
+        sentences = split_into_sentences(response)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
 
         translation_payload = {
             "sentences": sentences,
-            "src_lang": source_language,
             "tgt_lang": target_language
         }
-        translation_response = requests.post(
-            f"{translation_api_url}/translate?src_lang={source_language}&tgt_lang={target_language}",
-            json=translation_payload,
-            headers={"accept": "application/json", "Content-Type": "application/json"}
-        )
-        translation_response.raise_for_status()
-        translation_result = translation_response.json()
- 
-        translated_response = " ".join(translation_result["translations"])
+        try:
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang=english&tgt_lang={target_language}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
+
+        translated_summary = " ".join(translation_result.get("translations", []))
+        if not translated_summary:
+            raise HTTPException(status_code=500, detail="Translation API returned empty translations")
 
         return JSONResponse(content={
             "original_text": extracted_text,
-            "response": response,
-            "translated_response": translated_response,
-            "processed_page": page_number
+            "query_answer": response,
+            "translated_query_answer": translated_summary,
         })
 
     except requests.exceptions.RequestException as e:
