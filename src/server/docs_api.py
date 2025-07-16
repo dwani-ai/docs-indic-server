@@ -409,7 +409,7 @@ async def indic_custom_prompt_pdf(
         }
         try:
             translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang=english&tgt_lang={target_language}",
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={target_language}",
                 json=translation_payload,
                 headers={"accept": "application/json", "Content-Type": "application/json"}
             )
@@ -497,7 +497,7 @@ async def indic_custom_prompt_pdf_all(
         }
         try:
             translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang=english&tgt_lang={target_language}",
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={target_language}",
                 json=translation_payload,
                 headers={"accept": "application/json", "Content-Type": "application/json"}
             )
@@ -737,7 +737,7 @@ async def indic_summarize_pdf_all(
         }
         try:
             translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang=english&tgt_lang={tgt_lang}",
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={tgt_lang}",
                 json=translation_payload,
                 headers={"accept": "application/json", "Content-Type": "application/json"}
             )
