@@ -187,12 +187,12 @@ async def extract_text_from_pdf(
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-
 @app.post("/extract-text-all/")
 async def extract_all_text_from_pdf(
     file: UploadFile = File(...),
     model: str = Body("gemma3", embed=True)
-):
+) -> JSONResponse:
+    """Extract text from all PDF pages in a single batch request."""
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
@@ -204,27 +204,70 @@ async def extract_all_text_from_pdf(
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
 
-        page_contents = {}
+        messages = []
+        page_images = []
+        
         for page_number in range(num_pages):
             try:
-                image_base64 = render_pdf_to_base64png(temp_file_path, page_number, target_longest_image_dim=1024)
+                image_base64 = render_pdf_to_base64png(
+                    temp_file_path, 
+                    page_number, 
+                    target_longest_image_dim=1024
+                )
+                page_images.append(image_base64)
+                messages.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                })
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to render PDF page: {str(e)}")
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to render PDF page {page_number}: {str(e)}")
 
+        messages.append({
+            "type": "text",
+            "text": (
+                f"Extract plain text from these {num_pages} PDF pages. "
+                "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+                "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted "
+                "and does not include markdown code blocks or any text outside the JSON object."
+            )
+        })
+
+        try:
+            client = get_openai_client(model)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": messages}],
+                temperature=0.2,
+                max_tokens=50000
+            )
+            
+            raw_response = response.choices[0].message.content
+            # Clean markdown code blocks
+            cleaned_response = raw_response
+            if raw_response.startswith("```json") and raw_response.endswith("```"):
+                cleaned_response = raw_response[7:-3].strip()
+            elif raw_response.startswith("```") and raw_response.endswith("```"):
+                cleaned_response = raw_response[3:-3].strip()
+            
             try:
-                page_content = ocr_page_with_rolm(image_base64, model)
-                page_contents[str(page_number)] = page_content
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"OCR processing failed: {str(e)}")
+                page_contents = json.loads(cleaned_response)
+            except json.JSONDecodeError as e:
+                os.remove(temp_file_path)
+                raise HTTPException(status_code=500, detail=f"Failed to parse OCR response as JSON: {str(e)}")
 
-        os.remove(temp_file_path)
+            os.remove(temp_file_path)
+            return JSONResponse(content={"page_contents": page_contents})
 
-        return JSONResponse(content={"page_contents": page_contents})
+        except Exception as e:
+            os.remove(temp_file_path)
+            raise HTTPException(status_code=500, detail=f"OCR batch processing failed: {str(e)}")
 
     except Exception as e:
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
     
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
@@ -318,7 +361,7 @@ async def indic_custom_prompt_pdf(
     file: UploadFile = File(...),
     page_number: int = Body(1, embed=True, ge=1),
     prompt: str = Body(..., embed=True),
-    source_language: str = Body("eng_Latn", embed=True),
+    query_language: str = Body("eng_Latn", embed=True),
     target_language: str = Body("kan_Knda", embed=True),
     model: str = Body("gemma3", embed=True)
 ):
@@ -327,7 +370,7 @@ async def indic_custom_prompt_pdf(
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
         if not prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-        if source_language not in language_options:
+        if query_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid source language: {source_language}")
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
@@ -348,27 +391,42 @@ async def indic_custom_prompt_pdf(
         )
         response = custom_response.choices[0].message.content
 
-        sentences =split_into_sentences(response)
+        if target_language in ["eng_Latn", "deu_Latn"]:
+            return JSONResponse(content={
+                "original_text": extracted_text,
+                "query_answer": response,
+                "translated_query_answer": response,
+                "processed_page": page_number
+            })
+
+        sentences = split_into_sentences(response)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
 
         translation_payload = {
             "sentences": sentences,
-            "src_lang": source_language,
+            "src_lang" : "eng_Latn",
             "tgt_lang": target_language
         }
-        translation_response = requests.post(
-            f"{translation_api_url}/translate?src_lang={source_language}&tgt_lang={target_language}",
-            json=translation_payload,
-            headers={"accept": "application/json", "Content-Type": "application/json"}
-        )
-        translation_response.raise_for_status()
-        translation_result = translation_response.json()
- 
-        translated_response = " ".join(translation_result["translations"])
+        try:
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={target_language}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
+
+        translated_summary = " ".join(translation_result.get("translations", []))
+        if not translated_summary:
+            raise HTTPException(status_code=500, detail="Translation API returned empty translations")
 
         return JSONResponse(content={
             "original_text": extracted_text,
-            "response": response,
-            "translated_response": translated_response,
+            "query_answer": response,
+            "translated_query_answer": translated_summary,
             "processed_page": page_number
         })
 
@@ -376,6 +434,95 @@ async def indic_custom_prompt_pdf(
         raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/indic-custom-prompt-pdf-all")
+async def indic_custom_prompt_pdf_all(
+    file: UploadFile = File(...),
+    prompt: str = Body(..., embed=True),
+    query_language: str = Body("eng_Latn", embed=True),
+    target_language: str = Body("kan_Knda", embed=True),
+    model: str = Body("gemma3", embed=True)
+):
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        if not prompt.strip():
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+        if query_language not in language_options:
+            raise HTTPException(status_code=400, detail=f"Invalid source language: {query_language}")
+        if target_language not in language_options:
+            raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
+
+        text_response = await extract_text_batch_from_pdf(file, model)
+
+        page_contents_dict = json.loads(text_response.body.decode())["page_contents"]
+        
+        if not page_contents_dict:
+            raise HTTPException(status_code=500, detail="No text extracted from PDF pages")
+
+        # Convert dictionary values to a single string
+        text_response_string = "\n".join(str(value) for value in page_contents_dict.values() if value)
+        
+        if not text_response_string.strip():
+            raise HTTPException(status_code=500, detail="Extracted text is empty")
+
+        client = get_openai_client(model)
+        custom_response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": f"{prompt}\n\n{text_response_string}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        summary = custom_response.choices[0].message.content
+        
+        if not summary:
+            raise HTTPException(status_code=500, detail="PDF Query generation failed")
+
+        if target_language in ["eng_Latn", "deu_Latn"]:
+            return JSONResponse(content={
+                "original_text": text_response_string,
+                "query_answer": summary,
+                "translated_query_answer": summary,
+            })
+
+        sentences = split_into_sentences(summary)
+        if not sentences:
+            raise HTTPException(status_code=500, detail="No sentences found in summary for translation")
+
+        translation_payload = {
+            "sentences": sentences,
+            "src_lang": "eng_Latn",
+            "tgt_lang": target_language
+        }
+        try:
+            translation_response = requests.post(
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={target_language}",
+                json=translation_payload,
+                headers={"accept": "application/json", "Content-Type": "application/json"}
+            )
+            translation_response.raise_for_status()
+            translation_result = translation_response.json()
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=500, detail=f"Translation API failed: {str(e)}")
+
+        translated_summary = " ".join(translation_result.get("translations", []))
+        if not translated_summary:
+            raise HTTPException(status_code=500, detail="Translation API returned empty translations")
+
+        return JSONResponse(content={
+            "original_text": text_response_string,
+            "query_answer": summary,
+            "translated_query_answer": translated_summary,
+        })
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @app.post("/indic-summarize-pdf")
 async def indic_summarize_pdf(
@@ -588,11 +735,12 @@ async def indic_summarize_pdf_all(
 
         translation_payload = {
             "sentences": sentences,
+            "src_lang" : "eng_Latn",
             "tgt_lang": tgt_lang
         }
         try:
             translation_response = requests.post(
-                f"{translation_api_url}/translate?src_lang=english&tgt_lang={tgt_lang}",
+                f"{translation_api_url}/translate?src_lang=eng_Latn&tgt_lang={tgt_lang}",
                 json=translation_payload,
                 headers={"accept": "application/json", "Content-Type": "application/json"}
             )
