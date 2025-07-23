@@ -424,6 +424,7 @@ async def extract_all_text_from_pdf_chunk(
 
         # Ensure all pages from 0 to num_pages-1 are included
         ordered_page_contents = {str(i): page_contents.get(i, "") for i in range(num_pages)}
+        print(ordered_page_contents)
         logger.info(f"Successfully extracted text from all {num_pages} pages in order")
         return JSONResponse(content={"page_contents": ordered_page_contents})
 
@@ -438,7 +439,7 @@ async def extract_all_text_from_pdf_chunk(
             except OSError as e:
                 logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
 
-                
+
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
