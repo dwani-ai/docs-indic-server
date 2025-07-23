@@ -285,9 +285,11 @@ async def process_page_chunk(
     model: str
 ) -> Dict[int, str]:
     """Process a chunk of PDF pages and return extracted text as a dict."""
+    logger.info(f"Processing chunk with pages {page_numbers}")
     messages = []
     for page_number in page_numbers:
         try:
+            logger.debug(f"Rendering page {page_number}")
             image_base64 = render_pdf_to_base64png(
                 temp_file_path,
                 page_number,
@@ -298,6 +300,7 @@ async def process_page_chunk(
                 "image_url": {"url": f"data:image/png;base64,{image_base64}"}
             })
         except Exception as e:
+            logger.error(f"Failed to render PDF page {page_number}: {str(e)}")
             raise Exception(f"Failed to render PDF page {page_number}: {str(e)}")
 
     messages.append({
@@ -310,6 +313,7 @@ async def process_page_chunk(
     })
 
     try:
+        logger.debug(f"Calling OCR API for pages {page_numbers}")
         client = get_openai_client(model)
         response = await client.chat.completions.create(
             model=model,
@@ -318,6 +322,7 @@ async def process_page_chunk(
             max_tokens=50000
         )
         raw_response = response.choices[0].message.content
+        logger.debug(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")  # Log first 100 chars
         # Clean markdown code blocks
         cleaned_response = raw_response
         if raw_response.startswith("```json") and raw_response.endswith("```"):
@@ -325,9 +330,16 @@ async def process_page_chunk(
         elif raw_response.startswith("```") and raw_response.endswith("```"):
             cleaned_response = raw_response[3:-3].strip()
         
-        return json.loads(cleaned_response)
+        try:
+            result = json.loads(cleaned_response)
+            logger.info(f"Successfully processed chunk for pages {page_numbers}")
+            return result
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse OCR response for pages {page_numbers}: {str(e)}")
+            raise Exception(f"Failed to parse OCR response as JSON: {str(e)}")
     except Exception as e:
-        raise Exception(f"OCR processing failed for pages {page_numbers}: {str(e)}")
+        logger.error(f"OCR processing failed for pages {page_numbers}: {str(e)}")
+        raise
 
 @app.post("/extract-text-all-chunk/")
 async def extract_all_text_from_pdf_chunk(
@@ -342,16 +354,26 @@ async def extract_all_text_from_pdf_chunk(
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
         
         # Save PDF to temporary file
+        logger.info(f"Creating temporary file for PDF: {file.filename}")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
+        logger.info(f"Created temporary file: {temp_file_path}")
+
+        # Verify file exists
+        if not os.path.exists(temp_file_path):
+            logger.error(f"Temporary file not found: {temp_file_path}")
+            raise HTTPException(status_code=500, detail="Temporary file creation failed.")
 
         # Get total number of pages
+        logger.debug(f"Opening PDF to count pages: {temp_file_path}")
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
+        logger.info(f"PDF has {num_pages} pages")
 
         # Split pages into chunks
         page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
+        logger.info(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
 
         # Process chunks concurrently
         async def process_all_chunks():
@@ -361,28 +383,33 @@ async def extract_all_text_from_pdf_chunk(
             ]
             return await asyncio.gather(*tasks, return_exceptions=True)
 
+        logger.debug("Starting concurrent chunk processing")
         results = await process_all_chunks()
 
         # Check for errors in chunk processing
         page_contents = {}
-        for chunk_result in results:
+        for i, chunk_result in enumerate(results):
             if isinstance(chunk_result, Exception):
-                raise chunk_result  # Re-raise any chunk processing errors
+                logger.error(f"Chunk {i} (pages {page_chunks[i]}) failed: {str(chunk_result)}")
+                raise chunk_result
+            logger.debug(f"Chunk {i} (pages {page_chunks[i]}) succeeded")
             page_contents.update(chunk_result)
 
+        logger.info(f"Successfully extracted text from all {num_pages} pages")
         return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
+        logger.error(f"Batch processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
     finally:
-        # Clean up temporary file only once, if it exists
         if temp_file_path and os.path.exists(temp_file_path):
             try:
+                logger.info(f"Cleaning up temporary file: {temp_file_path}")
                 os.remove(temp_file_path)
-            except OSError:
-                pass  # Ignore errors during cleanup
+            except OSError as e:
+                logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
 
-            
+
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
