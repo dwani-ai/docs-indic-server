@@ -278,7 +278,25 @@ async def extract_all_text_from_pdf(
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+def get_openai_client(model: str) -> OpenAI:
+    """Initialize OpenAI client with model-specific base URL."""
+    valid_models = ["gemma3", "moondream", "qwen2.5vl", "qwen3", "sarvam-m", "deepseek-r1"]
+    if model not in valid_models:
+        raise ValueError(f"Invalid model: {model}. Choose from: {', '.join(valid_models)}")
     
+    model_ports = {
+        "qwen3": "9100",
+        "gemma3": "9000",
+        "moondream": "7882",
+        "qwen2.5vl": "7883",
+        "sarvam-m": "7884",
+        "deepseek-r1": "7885"
+    }
+    base_url = f"http://0.0.0.0:{model_ports[model]}/v1"
+    return OpenAI(api_key="http", base_url=base_url)
+
 async def process_page_chunk(
     temp_file_path: str, 
     page_numbers: List[int], 
@@ -315,14 +333,20 @@ async def process_page_chunk(
     try:
         logger.info(f"Calling OCR API for pages {page_numbers}")
         client = get_openai_client(model)
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": messages}],
-            temperature=0.2,
-            max_tokens=50000
-        )
+        # Run synchronous API call in a thread pool
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            response = await loop.run_in_executor(
+                pool,
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": messages}],
+                    temperature=0.2,
+                    max_tokens=50000
+                )
+            )
         raw_response = response.choices[0].message.content
-        logger.info(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")  # Log first 100 chars
+        logger.info(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")
         # Clean markdown code blocks
         cleaned_response = raw_response
         if raw_response.startswith("```json") and raw_response.endswith("```"):
@@ -340,6 +364,8 @@ async def process_page_chunk(
     except Exception as e:
         logger.error(f"OCR processing failed for pages {page_numbers}: {str(e)}")
         raise
+    finally:
+        client.close()  # Close synchronous client
 
 @app.post("/extract-text-all-chunk/")
 async def extract_all_text_from_pdf_chunk(
@@ -353,30 +379,24 @@ async def extract_all_text_from_pdf_chunk(
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
         
-        # Save PDF to temporary file
         logger.info(f"Creating temporary file for PDF: {file.filename}")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
         logger.info(f"Created temporary file: {temp_file_path}")
 
-        # Verify file exists
         if not os.path.exists(temp_file_path):
             logger.error(f"Temporary file not found: {temp_file_path}")
             raise HTTPException(status_code=500, detail="Temporary file creation failed.")
 
-        # Get total number of pages
         logger.info(f"Opening PDF to count pages: {temp_file_path}")
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
         logger.info(f"PDF has {num_pages} pages")
 
-        # Split pages into chunks
         page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
         logger.info(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
-        print(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
 
-        # Process chunks concurrently
         async def process_all_chunks():
             tasks = [
                 process_page_chunk(temp_file_path, chunk, model)
@@ -385,11 +405,8 @@ async def extract_all_text_from_pdf_chunk(
             return await asyncio.gather(*tasks, return_exceptions=True)
 
         logger.info("Starting concurrent chunk processing")
-        print("Starting concurrent chunk processing")
-        
         results = await process_all_chunks()
 
-        # Check for errors in chunk processing
         page_contents = {}
         for i, chunk_result in enumerate(results):
             if isinstance(chunk_result, Exception):
@@ -399,7 +416,6 @@ async def extract_all_text_from_pdf_chunk(
             page_contents.update(chunk_result)
 
         logger.info(f"Successfully extracted text from all {num_pages} pages")
-        print(f"Successfully extracted text from all {num_pages} pages")
         return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
@@ -413,6 +429,7 @@ async def extract_all_text_from_pdf_chunk(
             except OSError as e:
                 logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
 
+                
 
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
