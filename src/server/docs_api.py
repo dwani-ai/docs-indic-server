@@ -373,7 +373,7 @@ async def extract_all_text_from_pdf_chunk(
     model: str = Body("gemma3", embed=True),
     chunk_size: int = Body(5, embed=True)
 ) -> JSONResponse:
-    """Extract text from all PDF pages using concurrent chunk processing."""
+    """Extract text from all PDF pages using concurrent chunk processing, maintaining page order."""
     temp_file_path = None
     try:
         if not file.filename.lower().endswith(".pdf"):
@@ -407,18 +407,25 @@ async def extract_all_text_from_pdf_chunk(
         logger.info("Starting concurrent chunk processing")
         results = await process_all_chunks()
 
+        # Combine results in page order
         page_contents = {}
-        for i, chunk_result in enumerate(results):
+        for i, (chunk, chunk_result) in enumerate(zip(page_chunks, results)):
             if isinstance(chunk_result, Exception):
-                logger.error(f"Chunk {i} (pages {page_chunks[i]}) failed: {str(chunk_result)}")
+                logger.error(f"Chunk {i} (pages {chunk}) failed: {str(chunk_result)}")
                 raise chunk_result
-            logger.debug(f"Chunk {i} (pages {page_chunks[i]}) succeeded")
-            page_contents.update(chunk_result)
+            logger.debug(f"Chunk {i} (pages {chunk}) succeeded")
+            # Ensure pages are added in order
+            for page_num in chunk:
+                if str(page_num) in chunk_result:
+                    page_contents[page_num] = chunk_result[str(page_num)]
+                else:
+                    logger.warning(f"Page {page_num} missing in chunk result")
+                    page_contents[page_num] = ""
 
-        logger.info(f"Successfully extracted text from all {num_pages} pages")
-
-        print(page_contents)
-        return JSONResponse(content={"page_contents": page_contents})
+        # Ensure all pages from 0 to num_pages-1 are included
+        ordered_page_contents = {str(i): page_contents.get(i, "") for i in range(num_pages)}
+        logger.info(f"Successfully extracted text from all {num_pages} pages in order")
+        return JSONResponse(content={"page_contents": ordered_page_contents})
 
     except Exception as e:
         logger.error(f"Batch processing failed: {str(e)}")
@@ -431,8 +438,7 @@ async def extract_all_text_from_pdf_chunk(
             except OSError as e:
                 logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
 
-
-
+                
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
