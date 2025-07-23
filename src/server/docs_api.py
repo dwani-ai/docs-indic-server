@@ -27,6 +27,17 @@ from reportlab.lib.styles import getSampleStyleSheet
 from num2words import num2words
 from datetime import datetime
 import pytz
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi.responses import JSONResponse
+import pdfplumber
+import tempfile
+import os
+import json
+import asyncio
+from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
+
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -268,7 +279,110 @@ async def extract_all_text_from_pdf(
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
-    
+
+async def process_page_chunk(
+    temp_file_path: str, 
+    page_numbers: List[int], 
+    model: str
+) -> Dict[int, str]:
+    """Process a chunk of PDF pages and return extracted text as a dict."""
+    messages = []
+    for page_number in page_numbers:
+        try:
+            image_base64 = render_pdf_to_base64png(
+                temp_file_path,
+                page_number,
+                target_longest_image_dim=768  # Reduced resolution for speed
+            )
+            messages.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+            })
+        except Exception as e:
+            raise Exception(f"Failed to render PDF page {page_number}: {str(e)}")
+
+    messages.append({
+        "type": "text",
+        "text": (
+            f"Extract plain text from these {len(page_numbers)} PDF pages. "
+            "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+            "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted."
+        )
+    })
+
+    try:
+        client = get_openai_client(model)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": messages}],
+            temperature=0.2,
+            max_tokens=50000
+        )
+        raw_response = response.choices[0].message.content
+        # Clean markdown code blocks
+        cleaned_response = raw_response
+        if raw_response.startswith("```json") and raw_response.endswith("```"):
+            cleaned_response = raw_response[7:-3].strip()
+        elif raw_response.startswith("```") and raw_response.endswith("```"):
+            cleaned_response = raw_response[3:-3].strip()
+        
+        return json.loads(cleaned_response)
+    except Exception as e:
+        raise Exception(f"OCR processing failed for pages {page_numbers}: {str(e)}")
+
+@app.post("/extract-text-all-chunk/")
+async def extract_all_text_from_pdf_chunk(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True),
+    chunk_size: int = Body(5, embed=True)  # Configurable chunk size
+) -> JSONResponse:
+    """Extract text from all PDF pages using concurrent chunk processing."""
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        # Save PDF to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        # Get total number of pages
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+
+        # Split pages into chunks
+        page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
+
+        # Process chunks concurrently
+        async def process_all_chunks():
+            tasks = [
+                process_page_chunk(temp_file_path, chunk, model)
+                for chunk in page_chunks
+            ]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+
+        try:
+            results = await process_all_chunks()
+            os.remove(temp_file_path)  # Clean up after processing
+
+            # Combine results
+            page_contents = {}
+            for chunk_result in results:
+                if isinstance(chunk_result, Exception):
+                    raise chunk_result  # Re-raise any chunk processing errors
+                page_contents.update(chunk_result)
+
+            return JSONResponse(content={"page_contents": page_contents})
+
+        except Exception as e:
+            os.remove(temp_file_path)
+            raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
+
+    except Exception as e:
+        if 'temp_file_path' in locals():
+            os.remove(temp_file_path)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
