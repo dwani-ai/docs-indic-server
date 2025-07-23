@@ -279,7 +279,6 @@ async def extract_all_text_from_pdf(
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     
-
 async def process_page_chunk(
     temp_file_path: str, 
     page_numbers: List[int], 
@@ -292,7 +291,7 @@ async def process_page_chunk(
             image_base64 = render_pdf_to_base64png(
                 temp_file_path,
                 page_number,
-                target_longest_image_dim=768  # Reduced resolution for speed
+                target_longest_image_dim=768
             )
             messages.append({
                 "type": "image_url",
@@ -334,9 +333,10 @@ async def process_page_chunk(
 async def extract_all_text_from_pdf_chunk(
     file: UploadFile = File(...),
     model: str = Body("gemma3", embed=True),
-    chunk_size: int = Body(5, embed=True)  # Configurable chunk size
+    chunk_size: int = Body(5, embed=True)
 ) -> JSONResponse:
     """Extract text from all PDF pages using concurrent chunk processing."""
+    temp_file_path = None
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
@@ -361,28 +361,28 @@ async def extract_all_text_from_pdf_chunk(
             ]
             return await asyncio.gather(*tasks, return_exceptions=True)
 
-        try:
-            results = await process_all_chunks()
-            os.remove(temp_file_path)  # Clean up after processing
+        results = await process_all_chunks()
 
-            # Combine results
-            page_contents = {}
-            for chunk_result in results:
-                if isinstance(chunk_result, Exception):
-                    raise chunk_result  # Re-raise any chunk processing errors
-                page_contents.update(chunk_result)
+        # Check for errors in chunk processing
+        page_contents = {}
+        for chunk_result in results:
+            if isinstance(chunk_result, Exception):
+                raise chunk_result  # Re-raise any chunk processing errors
+            page_contents.update(chunk_result)
 
-            return JSONResponse(content={"page_contents": page_contents})
-
-        except Exception as e:
-            os.remove(temp_file_path)
-            raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
+        return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
-        if 'temp_file_path' in locals():
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
+    finally:
+        # Clean up temporary file only once, if it exists
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass  # Ignore errors during cleanup
 
+            
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
