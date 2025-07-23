@@ -289,7 +289,7 @@ async def process_page_chunk(
     messages = []
     for page_number in page_numbers:
         try:
-            logger.debug(f"Rendering page {page_number}")
+            logger.info(f"Rendering page {page_number}")
             image_base64 = render_pdf_to_base64png(
                 temp_file_path,
                 page_number,
@@ -313,7 +313,7 @@ async def process_page_chunk(
     })
 
     try:
-        logger.debug(f"Calling OCR API for pages {page_numbers}")
+        logger.info(f"Calling OCR API for pages {page_numbers}")
         client = get_openai_client(model)
         response = await client.chat.completions.create(
             model=model,
@@ -322,7 +322,7 @@ async def process_page_chunk(
             max_tokens=50000
         )
         raw_response = response.choices[0].message.content
-        logger.debug(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")  # Log first 100 chars
+        logger.info(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")  # Log first 100 chars
         # Clean markdown code blocks
         cleaned_response = raw_response
         if raw_response.startswith("```json") and raw_response.endswith("```"):
@@ -366,7 +366,7 @@ async def extract_all_text_from_pdf_chunk(
             raise HTTPException(status_code=500, detail="Temporary file creation failed.")
 
         # Get total number of pages
-        logger.debug(f"Opening PDF to count pages: {temp_file_path}")
+        logger.info(f"Opening PDF to count pages: {temp_file_path}")
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
         logger.info(f"PDF has {num_pages} pages")
@@ -374,6 +374,7 @@ async def extract_all_text_from_pdf_chunk(
         # Split pages into chunks
         page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
         logger.info(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
+        print(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
 
         # Process chunks concurrently
         async def process_all_chunks():
@@ -383,7 +384,9 @@ async def extract_all_text_from_pdf_chunk(
             ]
             return await asyncio.gather(*tasks, return_exceptions=True)
 
-        logger.debug("Starting concurrent chunk processing")
+        logger.info("Starting concurrent chunk processing")
+        print("Starting concurrent chunk processing")
+        
         results = await process_all_chunks()
 
         # Check for errors in chunk processing
@@ -396,6 +399,7 @@ async def extract_all_text_from_pdf_chunk(
             page_contents.update(chunk_result)
 
         logger.info(f"Successfully extracted text from all {num_pages} pages")
+        print(f"Successfully extracted text from all {num_pages} pages")
         return JSONResponse(content={"page_contents": page_contents})
 
     except Exception as e:
