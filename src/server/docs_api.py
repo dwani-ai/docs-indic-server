@@ -56,12 +56,12 @@ translation_api_url = "http://0.0.0.0:7862"
 
 # Supported language codes
 language_options = [
-    "kan_Knda",  # Kannada
-    "eng_Latn",  # English
-    "hin_Deva",  # Hindi
-    "tam_Taml",  # Tamil
-    "tel_Telu",  # Telugu
-    "deu_Latn",
+"eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml", "mal_Mlym", "tel_Telu",
+"asm_Beng", "kas_Arab" , "pan_Guru","ben_Beng" , "kas_Deva" , "san_Deva",
+"brx_Deva", "mai_Deva" , "sat_Olck" , "doi_Deva", "mal_Mlym", "snd_Arab",
+"mar_Deva" , "snd_Deva", "gom_Deva", "mni_Beng", "guj_Gujr", "mni_Mtei",
+"npi_Deva", "urd_Arab", "ory_Orya",
+
 ]
 
 
