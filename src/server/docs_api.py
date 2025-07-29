@@ -27,6 +27,17 @@ from reportlab.lib.styles import getSampleStyleSheet
 from num2words import num2words
 from datetime import datetime
 import pytz
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi.responses import JSONResponse
+import pdfplumber
+import tempfile
+import os
+import json
+import asyncio
+from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
+
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -45,12 +56,12 @@ translation_api_url = "http://0.0.0.0:7862"
 
 # Supported language codes
 language_options = [
-    "kan_Knda",  # Kannada
-    "eng_Latn",  # English
-    "hin_Deva",  # Hindi
-    "tam_Taml",  # Tamil
-    "tel_Telu",  # Telugu
-    "deu_Latn",
+"eng_Latn", "hin_Deva", "kan_Knda", "tam_Taml", "mal_Mlym", "tel_Telu",
+"asm_Beng", "kas_Arab" , "pan_Guru","ben_Beng" , "kas_Deva" , "san_Deva",
+"brx_Deva", "mai_Deva" , "sat_Olck" , "doi_Deva", "mal_Mlym", "snd_Arab",
+"mar_Deva" , "snd_Deva", "gom_Deva", "mni_Beng", "guj_Gujr", "mni_Mtei",
+"npi_Deva", "urd_Arab", "ory_Orya",
+
 ]
 
 
@@ -267,8 +278,168 @@ async def extract_all_text_from_pdf(
         if 'temp_file_path' in locals():
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+def get_openai_client(model: str) -> OpenAI:
+    """Initialize OpenAI client with model-specific base URL."""
+    valid_models = ["gemma3", "moondream", "qwen2.5vl", "qwen3", "sarvam-m", "deepseek-r1"]
+    if model not in valid_models:
+        raise ValueError(f"Invalid model: {model}. Choose from: {', '.join(valid_models)}")
     
-    
+    model_ports = {
+        "qwen3": "9100",
+        "gemma3": "9000",
+        "moondream": "7882",
+        "qwen2.5vl": "7883",
+        "sarvam-m": "7884",
+        "deepseek-r1": "7885"
+    }
+    base_url = f"http://0.0.0.0:{model_ports[model]}/v1"
+    return OpenAI(api_key="http", base_url=base_url)
+
+async def process_page_chunk(
+    temp_file_path: str, 
+    page_numbers: List[int], 
+    model: str
+) -> Dict[int, str]:
+    """Process a chunk of PDF pages and return extracted text as a dict."""
+    logger.info(f"Processing chunk with pages {page_numbers}")
+    messages = []
+    for page_number in page_numbers:
+        try:
+            logger.info(f"Rendering page {page_number}")
+            image_base64 = render_pdf_to_base64png(
+                temp_file_path,
+                page_number,
+                target_longest_image_dim=768
+            )
+            messages.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+            })
+        except Exception as e:
+            logger.error(f"Failed to render PDF page {page_number}: {str(e)}")
+            raise Exception(f"Failed to render PDF page {page_number}: {str(e)}")
+
+    messages.append({
+        "type": "text",
+        "text": (
+            f"Extract plain text from these {len(page_numbers)} PDF pages. "
+            "Return the results as a valid JSON object where keys are page numbers (starting from 0) "
+            "and values are the extracted text for each page. Ensure the response is strictly JSON-formatted."
+        )
+    })
+
+    try:
+        logger.info(f"Calling OCR API for pages {page_numbers}")
+        client = get_openai_client(model)
+        # Run synchronous API call in a thread pool
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            response = await loop.run_in_executor(
+                pool,
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": messages}],
+                    temperature=0.2,
+                    max_tokens=50000
+                )
+            )
+        raw_response = response.choices[0].message.content
+        logger.info(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")
+        # Clean markdown code blocks
+        cleaned_response = raw_response
+        if raw_response.startswith("```json") and raw_response.endswith("```"):
+            cleaned_response = raw_response[7:-3].strip()
+        elif raw_response.startswith("```") and raw_response.endswith("```"):
+            cleaned_response = raw_response[3:-3].strip()
+        
+        try:
+            result = json.loads(cleaned_response)
+            logger.info(f"Successfully processed chunk for pages {page_numbers}")
+            return result
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse OCR response for pages {page_numbers}: {str(e)}")
+            raise Exception(f"Failed to parse OCR response as JSON: {str(e)}")
+    except Exception as e:
+        logger.error(f"OCR processing failed for pages {page_numbers}: {str(e)}")
+        raise
+    finally:
+        client.close()  # Close synchronous client
+
+@app.post("/extract-text-all-chunk/")
+async def extract_all_text_from_pdf_chunk(
+    file: UploadFile = File(...),
+    model: str = Body("gemma3", embed=True),
+    chunk_size: int = Body(5, embed=True)
+) -> JSONResponse:
+    """Extract text from all PDF pages using concurrent chunk processing, maintaining page order."""
+    temp_file_path = None
+    try:
+        if not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files supported.")
+        
+        logger.info(f"Creating temporary file for PDF: {file.filename}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+        logger.info(f"Created temporary file: {temp_file_path}")
+
+        if not os.path.exists(temp_file_path):
+            logger.error(f"Temporary file not found: {temp_file_path}")
+            raise HTTPException(status_code=500, detail="Temporary file creation failed.")
+
+        logger.info(f"Opening PDF to count pages: {temp_file_path}")
+        with pdfplumber.open(temp_file_path) as pdf:
+            num_pages = len(pdf.pages)
+        logger.info(f"PDF has {num_pages} pages")
+
+        page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
+        logger.info(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
+
+        async def process_all_chunks():
+            tasks = [
+                process_page_chunk(temp_file_path, chunk, model)
+                for chunk in page_chunks
+            ]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.info("Starting concurrent chunk processing")
+        results = await process_all_chunks()
+
+        # Combine results in page order
+        page_contents = {}
+        for i, (chunk, chunk_result) in enumerate(zip(page_chunks, results)):
+            if isinstance(chunk_result, Exception):
+                logger.error(f"Chunk {i} (pages {chunk}) failed: {str(chunk_result)}")
+                raise chunk_result
+            logger.debug(f"Chunk {i} (pages {chunk}) succeeded")
+            # Ensure pages are added in order
+            for page_num in chunk:
+                if str(page_num) in chunk_result:
+                    page_contents[page_num] = chunk_result[str(page_num)]
+                else:
+                    logger.warning(f"Page {page_num} missing in chunk result")
+                    page_contents[page_num] = ""
+
+        # Ensure all pages from 0 to num_pages-1 are included
+        ordered_page_contents = {str(i): page_contents.get(i, "") for i in range(num_pages)}
+        print(ordered_page_contents)
+        logger.info(f"Successfully extracted text from all {num_pages} pages in order")
+        return JSONResponse(content={"page_contents": ordered_page_contents})
+
+    except Exception as e:
+        logger.error(f"Batch processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                logger.info(f"Cleaning up temporary file: {temp_file_path}")
+                os.remove(temp_file_path)
+            except OSError as e:
+                logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
+
+
 @app.post("/ocr")
 async def ocr_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/png"):
