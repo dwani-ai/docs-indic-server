@@ -542,7 +542,7 @@ async def indic_custom_prompt_pdf(
         if not prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
         if query_language not in language_options:
-            raise HTTPException(status_code=400, detail=f"Invalid source language: {source_language}")
+            raise HTTPException(status_code=400, detail=f"Invalid source language: {query_language}")
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
 
