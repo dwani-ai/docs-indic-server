@@ -542,7 +542,7 @@ async def indic_custom_prompt_pdf(
         if not prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
         if query_language not in language_options:
-            raise HTTPException(status_code=400, detail=f"Invalid source language: {source_language}")
+            raise HTTPException(status_code=400, detail=f"Invalid source language: {query_language}")
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
 
@@ -1347,72 +1347,6 @@ async def indic_visual_query(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-# Updated Visual Query Endpoint
-@app.post("/visual-query-direct/",
-          summary="Visual Query with Image",
-          description="Extract text from a PNG image using OCR, optionally process it with a custom prompt",
-          tags=["Chat"],
-          responses={
-              200: {"description": "Extracted text "},
-              400: {"description": "Invalid image, prompt"},
-              500: {"description": "OCR error"}
-          })
-async def indic_visual_query_direct(
-    request: Request,
-    file: UploadFile = File(..., description="PNG image file to analyze"),
-    prompt: Optional[str] = Form(None, description="Optional custom prompt to process the extracted text"),
-    model: str = Form("gemma3", description="LLM model", enum=["gemma3", "moondream", "smolvla"])
-):
-    try:
-        if not file.content_type.startswith("image/png"):
-            raise HTTPException(status_code=400, detail="Only PNG images supported")
-
-        logger.info(f"Processing indic visual query: model={model}, prompt={prompt[:50] if prompt else None}")
-
-        image_bytes = await file.read()
-        image = BytesIO(image_bytes)
-        img_base64 = encode_image(image)
-        extracted_text = ocr_page_with_rolm(img_base64, model)
-
-        response = None
-        text_to_translate = extracted_text
-        if prompt and prompt.strip():
-            client = get_openai_client(model)
-            custom_response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": [{"type": "text", "text": "You are dwani, a helpful assistant. Summarize your answer in maximum 1 sentence. If the answer contains numerical digits, convert the digits into words"}]
-                    },
-                    {"role": "user", "content": f"{prompt}\n\n{extracted_text}"}
-                ],
-                temperature=0.3,
-                max_tokens=500
-            )
-            response = custom_response.choices[0].message.content
-            
-        elif prompt and not prompt.strip():
-            raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-
-        result = {
-            "extracted_text": extracted_text,
-            "response": response
-        }
-        if response:
-            result["response"] = response
-
-        logger.info(f"visual query direct successful: extracted_text_length={len(extracted_text)}")
-        return JSONResponse(content=result)
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error translating: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error translating: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
 class Settings:
     chat_rate_limit = "10/minute"
     max_tokens = 500
@@ -1564,52 +1498,6 @@ async def indic_chat(
     except requests.exceptions.RequestException as e:
         logger.error(f"Translation API error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Translation API error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
-@app.post("/chat_direct")
-async def chat_direct(
-    request: Request,
-    chat_request: ChatDirectRequest,
-    settings=Depends(get_settings)
-):
-    if not chat_request.prompt.strip():
-        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
-
-    logger.info(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
-
-    try:
-
-        prompt_to_process = chat_request.prompt
-
-        system_prompt = chat_request.system_prompt
-
-        current_time = time_to_words()
-
-        dwani_prompt = f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}" 
-        client = get_openai_client(chat_request.model)
-        response = client.chat.completions.create(
-            model=chat_request.model,
-            messages=[
-                {
-                    "role": "system",
-                #    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
-                    "content": [{"type": "text", "text": system_prompt }]
-                
-                },
-                {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
-            ],
-            temperature=0.3,
-            max_tokens=settings.max_tokens
-        )
-        generated_response = response.choices[0].message.content
-        logger.info(f"Generated response: {generated_response}")
-
-
-        return JSONResponse(content={"response": generated_response})
-
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
