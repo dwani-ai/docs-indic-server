@@ -1503,52 +1503,6 @@ async def indic_chat(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.post("/chat_direct")
-async def chat_direct(
-    request: Request,
-    chat_request: ChatDirectRequest,
-    settings=Depends(get_settings)
-):
-    if not chat_request.prompt.strip():
-        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
-
-    logger.info(f"Received prompt: {chat_request.prompt},  model: {chat_request.model}")
-
-    try:
-
-        prompt_to_process = chat_request.prompt
-
-        system_prompt = chat_request.system_prompt
-
-        current_time = time_to_words()
-
-        dwani_prompt = f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}" 
-        client = get_openai_client(chat_request.model)
-        response = client.chat.completions.create(
-            model=chat_request.model,
-            messages=[
-                {
-                    "role": "system",
-                #    "content": [{"type": "text", "text": f"You are Dwani, a helpful assistant. Answer questions considering India as base country and Karnataka as base state. Provide a concise response in one sentence maximum. If the answer contains numerical digits, convert the digits into words. If user asks the time, then return answer as {current_time}"}]
-                    "content": [{"type": "text", "text": system_prompt }]
-                
-                },
-                {"role": "user", "content": [{"type": "text", "text": prompt_to_process}]}
-            ],
-            temperature=0.3,
-            max_tokens=settings.max_tokens
-        )
-        generated_response = response.choices[0].message.content
-        logger.info(f"Generated response: {generated_response}")
-
-
-        return JSONResponse(content={"response": generated_response})
-
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
 @app.middleware("http")
 async def add_request_timing(request: Request, call_next):
     start_time = time()
