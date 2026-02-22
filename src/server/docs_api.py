@@ -303,11 +303,11 @@ async def process_page_chunk(
     model: str
 ) -> Dict[int, str]:
     """Process a chunk of PDF pages and return extracted text as a dict."""
-    logger.info(f"Processing chunk with pages {page_numbers}")
+    logger.debug(f"Processing chunk with pages {page_numbers}")
     messages = []
     for page_number in page_numbers:
         try:
-            logger.info(f"Rendering page {page_number}")
+            logger.debug(f"Rendering page {page_number}")
             image_base64 = render_pdf_to_base64png(
                 temp_file_path,
                 page_number,
@@ -331,7 +331,7 @@ async def process_page_chunk(
     })
 
     try:
-        logger.info(f"Calling OCR API for pages {page_numbers}")
+        logger.debug(f"Calling OCR API for pages {page_numbers}")
         client = get_openai_client(model)
         # Run synchronous API call in a thread pool
         loop = asyncio.get_event_loop()
@@ -346,7 +346,7 @@ async def process_page_chunk(
                 )
             )
         raw_response = response.choices[0].message.content
-        logger.info(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")
+        logger.debug(f"Raw OCR response for pages {page_numbers}: {raw_response[:100]}...")
         # Clean markdown code blocks
         cleaned_response = raw_response
         if raw_response.startswith("```json") and raw_response.endswith("```"):
@@ -356,7 +356,7 @@ async def process_page_chunk(
         
         try:
             result = json.loads(cleaned_response)
-            logger.info(f"Successfully processed chunk for pages {page_numbers}")
+            logger.debug(f"Successfully processed chunk for pages {page_numbers}")
             return result
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse OCR response for pages {page_numbers}: {str(e)}")
@@ -379,23 +379,23 @@ async def extract_all_text_from_pdf_chunk(
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files supported.")
         
-        logger.info(f"Creating temporary file for PDF: {file.filename}")
+        logger.debug(f"Creating temporary file for PDF: {file.filename}")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             temp_file.write(await file.read())
             temp_file_path = temp_file.name
-        logger.info(f"Created temporary file: {temp_file_path}")
+        logger.debug(f"Created temporary file: {temp_file_path}")
 
         if not os.path.exists(temp_file_path):
             logger.error(f"Temporary file not found: {temp_file_path}")
             raise HTTPException(status_code=500, detail="Temporary file creation failed.")
 
-        logger.info(f"Opening PDF to count pages: {temp_file_path}")
+        logger.debug(f"Opening PDF to count pages: {temp_file_path}")
         with pdfplumber.open(temp_file_path) as pdf:
             num_pages = len(pdf.pages)
-        logger.info(f"PDF has {num_pages} pages")
+        logger.debug(f"PDF has {num_pages} pages")
 
         page_chunks = [list(range(i, min(i + chunk_size, num_pages))) for i in range(0, num_pages, chunk_size)]
-        logger.info(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
+        logger.debug(f"Split into {len(page_chunks)} chunks with chunk size {chunk_size}")
 
         async def process_all_chunks():
             tasks = [
@@ -404,7 +404,7 @@ async def extract_all_text_from_pdf_chunk(
             ]
             return await asyncio.gather(*tasks, return_exceptions=True)
 
-        logger.info("Starting concurrent chunk processing")
+        logger.debug("Starting concurrent chunk processing")
         results = await process_all_chunks()
 
         # Combine results in page order
@@ -425,7 +425,7 @@ async def extract_all_text_from_pdf_chunk(
         # Ensure all pages from 0 to num_pages-1 are included
         ordered_page_contents = {str(i): page_contents.get(i, "") for i in range(num_pages)}
         print(ordered_page_contents)
-        logger.info(f"Successfully extracted text from all {num_pages} pages in order")
+        logger.debug(f"Successfully extracted text from all {num_pages} pages in order")
         return JSONResponse(content={"page_contents": ordered_page_contents})
 
     except Exception as e:
@@ -434,7 +434,7 @@ async def extract_all_text_from_pdf_chunk(
     finally:
         if temp_file_path and os.path.exists(temp_file_path):
             try:
-                logger.info(f"Cleaning up temporary file: {temp_file_path}")
+                logger.debug(f"Cleaning up temporary file: {temp_file_path}")
                 os.remove(temp_file_path)
             except OSError as e:
                 logger.warning(f"Failed to clean up temporary file {temp_file_path}: {str(e)}")
@@ -1254,7 +1254,7 @@ async def indic_visual_query(
         if target_language not in language_options:
             raise HTTPException(status_code=400, detail=f"Invalid target language: {target_language}")
 
-        logger.info(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
+        logger.debug(f"Processing indic visual query: model={model}, source_language={source_language}, target_language={target_language}, prompt={prompt[:50] if prompt else None}")
 
         image_bytes = await file.read()
         image = BytesIO(image_bytes)
@@ -1293,7 +1293,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -1304,7 +1304,7 @@ async def indic_visual_query(
                 "extracted_text": response,
                 "translated_response": response,
             }
-            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, response_length={len(response)}")
             if response:
                 result["response"] = response
 
@@ -1330,7 +1330,7 @@ async def indic_visual_query(
                 "extracted_text": extracted_text,
                 "translated_response": translated_response,
             }
-            logger.info(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
+            logger.debug(f"Indic visual query successful: extracted_text_length={len(extracted_text)}, translated_response_length={len(translated_response)}")
 
             if response:
                 result["response"] = response
@@ -1376,7 +1376,7 @@ async def indic_chat(
     if not chat_request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    logger.info(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
+    logger.debug(f"Received prompt: {chat_request.prompt}, src_lang: {chat_request.src_lang}, tgt_lang: {chat_request.tgt_lang}, model: {chat_request.model}")
 
     current_time = time_to_words()
     try:
@@ -1409,7 +1409,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.info(f"Generated response: {generated_response}")
+            logger.debug(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
         
         elif (chat_request.tgt_lang == "deu_Latn"):
@@ -1430,7 +1430,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.info(f"Generated response: {generated_response}")
+            logger.debug(f"Generated response: {generated_response}")
             return JSONResponse(content={"response": generated_response})
 
         else :
@@ -1450,7 +1450,7 @@ async def indic_chat(
                 translation_result = translation_response.json()
                 prompt_to_process = " ".join(translation_result["translations"])
 
-                logger.info(f"Translated prompt to English: {prompt_to_process}")
+                logger.debug(f"Translated prompt to English: {prompt_to_process}")
 
             client = get_openai_client(chat_request.model)
             response = client.chat.completions.create(
@@ -1466,7 +1466,7 @@ async def indic_chat(
                 max_tokens=settings.max_tokens
             )
             generated_response = response.choices[0].message.content
-            logger.info(f"Generated response: {generated_response}")
+            logger.debug(f"Generated response: {generated_response}")
 
             final_response = generated_response
 
@@ -1491,7 +1491,7 @@ async def indic_chat(
                 translation_response.raise_for_status()
                 translation_result = translation_response.json()
                 final_response = " ".join(translation_result["translations"])
-                logger.info(f"Translated response to {chat_request.tgt_lang}: {final_response}")
+                logger.debug(f"Translated response to {chat_request.tgt_lang}: {final_response}")
 
                 return JSONResponse(content={"response": final_response})
 
